@@ -1,0 +1,196 @@
+# AI Document Translator - Default Configuration
+# For detailed information, see: https://github.com/yourusername/ai-document-translator/blob/main/README.md
+
+# ============================================
+# Translation Engine Settings
+# ============================================
+engine:
+  # Engine selection: openai, deepl
+  name: openai
+  
+  # API key (or use environment variable OPENAI_API_KEY/DEEPL_API_KEY)
+  # Leave null to use environment variable
+  api_key: null
+  
+  # OpenAI model selection
+  # Options: gpt-4o-mini (recommended), gpt-4, gpt-4-turbo-preview, gpt-3.5-turbo
+  model: gpt-4o-mini
+  
+  # Sampling temperature (0.0 = deterministic, 1.0 = creative)
+  # Lower values recommended for translation accuracy
+  temperature: 0.3
+  
+  # Maximum tokens in response
+  max_tokens: 4000
+  
+  # Request timeout in seconds
+  timeout: 30
+  
+  # Number of retry attempts on failure
+  max_retries: 3
+  
+  # DeepL specific settings (only used when engine = deepl)
+  pro: false              # Use DeepL Pro API (vs Free)
+  formality: default      # Options: default, more, less, prefer_more, prefer_less
+
+# ============================================
+# Cache Settings
+# ============================================
+cache:
+  # Enable caching to reduce costs and speed up retranslation
+  enabled: true
+  
+  # SQLite database path for cache storage
+  db_path: data/cache.db
+  
+  # Maximum age of cache entries in days
+  # Older entries are automatically cleaned up
+  max_age_days: 180
+  
+  # Maximum cache size in megabytes
+  # Cache is cleaned when this limit is approached
+  max_size_mb: 500
+  
+  # Log level for cache operations: DEBUG, INFO, WARNING, ERROR
+  log_level: INFO
+
+# ============================================
+# Glossary Settings
+# ============================================
+glossary:
+  # Enable glossary for consistent terminology
+  enabled: true
+  
+  # SQLite database path for glossary storage
+  db_path: data/glossary.db
+  
+  # Log level for glossary operations
+  log_level: INFO
+
+# ============================================
+# Batch Processing Settings
+# ============================================
+batch:
+  # Maximum number of parallel workers
+  # Increase for faster processing, decrease if hitting rate limits
+  max_workers: 3
+  
+  # Maximum retry attempts for failed tasks
+  max_retries: 2
+  
+  # Skip files that already exist in output directory
+  skip_existing: true
+
+# ============================================
+# Logging Settings
+# ============================================
+logging:
+  # Directory for log files
+  log_dir: logs
+  
+  # Overall log level
+  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_level: INFO
+  
+  # Console output level
+  console_level: INFO
+  
+  # File output level (can be more verbose than console)
+  file_level: DEBUG
+  
+  # Maximum log file size in bytes (10MB)
+  max_bytes: 10000000
+  
+  # Number of backup log files to keep
+  backup_count: 5
+  
+  # Use colored output in console
+  use_colors: true
+  
+  # Use JSON format for file logs (useful for log aggregation)
+  use_json: false
+
+# ============================================
+# UI Settings (for GUI)
+# ============================================
+ui:
+  # Theme: auto (system), light, dark
+  theme: auto
+  
+  # Interface language
+  language: en
+  
+  # Default window dimensions
+  window_width: 1200
+  window_height: 800
+  
+  # Remember window position between sessions
+  remember_window_position: true
+
+# ============================================
+# General Settings
+# ============================================
+
+# Default source language (ISO 639-1 code)
+default_source_lang: en
+
+# Default target language (ISO 639-1 code)
+default_target_lang: ru
+
+# Default domain for glossary matching
+default_domain: general
+
+# Preserve document formatting
+# Set to false for plain text translation only
+preserve_formatting: true
+
+# Output directory for translated documents
+output_dir: output
+
+# Temporary files directory
+temp_dir: temp
+
+# ============================================
+# Advanced Settings (Optional)
+# ============================================
+
+# Rate limiting (requests per minute)
+# rate_limit: 60
+
+# Cost tracking
+# track_costs: true
+# cost_limit_usd: 100.0
+
+# Quality assurance
+# enable_qa: false
+# qa_threshold: 0.8
+
+# Notifications
+# notify_on_complete: false
+# notify_email: null
+
+# ============================================
+# Supported Languages Reference
+# ============================================
+# en: English     es: Spanish      fr: French       de: German
+# it: Italian     pt: Portuguese   ru: Russian      ja: Japanese
+# zh: Chinese     ko: Korean       ar: Arabic       hi: Hindi
+# nl: Dutch       pl: Polish       tr: Turkish      sv: Swedish
+# da: Danish      no: Norwegian    fi: Finnish      cs: Czech
+# hu: Hungarian   ro: Romanian     bg: Bulgarian    el: Greek
+# he: Hebrew      th: Thai         vi: Vietnamese   id: Indonesian
+# uk: Ukrainian
+#
+# Full list: run `translator languages` command
+
+# ============================================
+# Cost Estimates (as of 2024)
+# ============================================
+# OpenAI GPT-4o-mini:
+#   Input: ~$0.15 per 1M tokens
+#   Output: ~$0.60 per 1M tokens
+#   Typical document: $0.01 - $0.10
+#
+# DeepL:
+#   Free: 500,000 chars/month
+#   Pro: $5.49 per 1M characters
