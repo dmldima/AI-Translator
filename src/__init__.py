@@ -1,7 +1,2 @@
-"""
-Command-line interface package.
-"""
-
-from .cli_interface import cli
-
-__all__ = ["cli"]
+"""AI Document Translator package."""
+__version__ = "1.0.0"
