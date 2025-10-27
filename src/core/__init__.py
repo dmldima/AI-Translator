@@ -1,4 +1,4 @@
-python"""Core translation system components."""
+"""Core translation system components."""
 from .factory import TranslationSystemFactory, ParserFactory, FormatterFactory, EngineFactory
 from .models import (
     Document, TextSegment, TranslationJob, TranslationResult,
