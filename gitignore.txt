@@ -1,0 +1,386 @@
+# ============================================
+# AI Document Translator - Git Ignore File
+# ============================================
+
+# ============================================
+# Environment Variables & Secrets
+# ============================================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.staging
+.env.production
+*.key
+secrets/
+credentials/
+
+# ============================================
+# API Keys & Configuration (Sensitive)
+# ============================================
+*api_key*
+*secret*
+*.pem
+*.p12
+*.pfx
+
+# ============================================
+# Python
+# ============================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+pipenv/
+poetry.lock
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# pytype
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# ============================================
+# Testing
+# ============================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+.hypothesis/
+.tox/
+.nox/
+coverage.xml
+*.log
+
+# ============================================
+# Jupyter Notebooks
+# ============================================
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================
+# Database Files
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+data/cache.db
+data/glossary.db
+cache.db
+glossary.db
+
+# ============================================
+# Logs
+# ============================================
+logs/
+*.log
+*.log.*
+cache.log
+glossary.log
+translation.log
+
+# ============================================
+# Translation Output
+# ============================================
+output/
+translated/
+temp/
+tmp/
+*.tmp
+
+# Test documents (keep examples/)
+test_document*.docx
+test_spreadsheet*.xlsx
+test_translated*.docx
+test_translated*.xlsx
+*_translated.*
+*_ru.*
+*_es.*
+*_de.*
+*_fr.*
+
+# ============================================
+# OS Files
+# ============================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ============================================
+# IDEs and Editors
+# ============================================
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+Session.vim
+Sessionx.vim
+.netrwhist
+
+# JetBrains
+.idea/
+*.iml
+out/
+.idea_modules/
+
+# Eclipse
+.metadata
+bin/
+tmp/
+*.tmp
+*.bak
+*.swp
+*~.nib
+local.properties
+.settings/
+.loadpath
+.recommenders
+.project
+.classpath
+
+# ============================================
+# Documentation Build
+# ============================================
+docs/_build/
+docs/_static/
+docs/_templates/
+site/
+
+# Sphinx
+_build/
+_static/
+_templates/
+
+# MkDocs
+site/
+
+# ============================================
+# Dependency Directories
+# ============================================
+node_modules/
+jspm_packages/
+bower_components/
+
+# ============================================
+# Package Files
+# ============================================
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# ============================================
+# Backup Files
+# ============================================
+*.bak
+*.backup
+*.old
+*~
+*_backup
+*_old
+
+# ============================================
+# Cache Directories
+# ============================================
+.cache/
+cache/
+.sass-cache/
+.parcel-cache/
+
+# ============================================
+# Build Artifacts
+# ============================================
+build/
+dist/
+target/
+out/
+*.o
+*.a
+*.exe
+*.app
+*.so
+*.dylib
+
+# ============================================
+# Docker
+# ============================================
+docker-compose.override.yml
+.dockerignore
+
+# ============================================
+# CI/CD
+# ============================================
+.github/workflows/secrets.yml
+
+# ============================================
+# Application Specific
+# ============================================
+# User configuration (keep config.yaml template)
+config.local.yaml
+config.user.yaml
+user_config.yaml
+
+# Downloaded models or large files
+models/
+downloads/
+
+# Processed batches
+batches/
+batch_results/
+
+# Monitoring and metrics
+metrics/
+stats/
+
+# ============================================
+# Development
+# ============================================
+scratch/
+playground/
+experiments/
+sandbox/
+debug/
+.debug/
+
+# ============================================
+# Security Scans
+# ============================================
+.trivy/
+.snyk
+
+# ============================================
+# Keep These Files (Examples)
+# ============================================
+!examples/
+!examples/*.docx
+!examples/*.xlsx
+!config.yaml
+!config.example.yaml
+!.env.example
+!README.md
+!LICENSE
+!requirements.txt
+
+# ============================================
+# Project Specific Additions
+# ============================================
+# Add any project-specific patterns below
+
