@@ -1,9 +1,10 @@
 """
 Enhanced XLSX Document Formatter with Complete Formatting Preservation.
 Handles merged cells, conditional formatting, and all cell properties.
+FIXED: Proper merged cell handling
 """
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 import logging
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
@@ -89,9 +90,8 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
     ) -> None:
         """
         Replace text in original workbook while preserving all formatting.
-        This is the key method for formatting preservation.
+        ENHANCED: Proper merged cell handling.
         """
-        # Build segment lookup by position
         segment_map = self._build_segment_map(segments)
         
         # Process all worksheets
@@ -99,56 +99,54 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
             sheet_name = sheet.title
             
             # Get merged cell ranges for this sheet
-            merged_ranges = self._get_merged_ranges(sheet)
+            merged_ranges = list(sheet.merged_cells.ranges)
+            
+            # Create mapping of merged cells
+            merged_cells_info = self._build_merged_cells_map(merged_ranges)
             
             for row in sheet.iter_rows():
                 for cell in row:
-                    # Build segment ID
-                    segment_id = (
-                        f"sheet_{sheet_name}_row_{cell.row}_col_{cell.column}"
-                    )
+                    segment_id = f"sheet_{sheet_name}_row_{cell.row}_col_{cell.column}"
                     
                     if segment_id in segment_map:
                         segment = segment_map[segment_id]
                         
-                        # Check if cell is part of merged range
-                        if self._is_merged_cell(cell, merged_ranges):
-                            # Only update top-left cell of merged range
-                            if self._is_topleft_of_merge(cell, merged_ranges):
+                        # Check if this is a merged cell
+                        if cell.coordinate in merged_cells_info:
+                            top_left_coord = merged_cells_info[cell.coordinate]
+                            
+                            # Only update if this is the top-left cell
+                            if cell.coordinate == top_left_coord:
                                 cell.value = segment.text
-                                logger.debug(
-                                    f"Updated merged cell {segment_id}"
-                                )
+                                logger.debug(f"Updated merged cell {segment_id}")
                         else:
                             # Regular cell - just replace value
                             cell.value = segment.text
                             logger.debug(f"Updated cell {segment_id}")
     
-    def _get_merged_ranges(self, sheet: Worksheet) -> List[str]:
-        """Get list of merged cell ranges in sheet."""
-        return list(sheet.merged_cells.ranges)
-    
-    def _is_merged_cell(self, cell, merged_ranges: List) -> bool:
-        """Check if cell is part of a merged range."""
-        cell_coord = cell.coordinate
+    def _build_merged_cells_map(self, merged_ranges: List) -> Dict[str, str]:
+        """
+        Build a map of all merged cell coordinates to their top-left coordinate.
+        
+        Args:
+            merged_ranges: List of merged cell ranges
+            
+        Returns:
+            Dict mapping any merged cell coordinate to its top-left coordinate
+        """
+        merged_cells_map = {}
         
         for merged_range in merged_ranges:
-            if cell_coord in merged_range:
-                return True
+            # Get top-left coordinate
+            top_left = f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}"
+            
+            # Map all cells in this range to the top-left
+            for row in range(merged_range.min_row, merged_range.max_row + 1):
+                for col in range(merged_range.min_col, merged_range.max_col + 1):
+                    coord = f"{get_column_letter(col)}{row}"
+                    merged_cells_map[coord] = top_left
         
-        return False
-    
-    def _is_topleft_of_merge(self, cell, merged_ranges: List) -> bool:
-        """Check if cell is top-left corner of merged range."""
-        cell_coord = cell.coordinate
-        
-        for merged_range in merged_ranges:
-            # Top-left is the min_row, min_col
-            if cell_coord in merged_range:
-                top_left = sheet[merged_range.min_row][merged_range.min_col]
-                return cell.coordinate == top_left.coordinate
-        
-        return False
+        return merged_cells_map
     
     def _build_segment_map(
         self,
@@ -438,3 +436,7 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
 class FormattingError(Exception):
     """Exception raised when formatting fails."""
     pass
+
+
+# Compatibility alias for existing code
+XlsxFormatter = EnhancedXlsxFormatter
