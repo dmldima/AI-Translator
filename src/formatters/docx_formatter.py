@@ -1,6 +1,7 @@
 """
 Enhanced DOCX Document Formatter with Complete Formatting Preservation.
 Implements best practices for maintaining all document styling.
+FIXED: Enhanced text replacement to preserve all formatting properties
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -89,7 +90,7 @@ class EnhancedDocxFormatter(IDocumentFormatter):
     ) -> None:
         """
         Replace text in original document while preserving all formatting.
-        This is the key method for formatting preservation.
+        ENHANCED: Better preservation of run properties.
         """
         # Build segment lookup by position
         segment_map = self._build_segment_map(segments)
@@ -101,8 +102,35 @@ class EnhancedDocxFormatter(IDocumentFormatter):
                 
                 if segment_id in segment_map:
                     segment = segment_map[segment_id]
-                    # Replace text while keeping all run properties
+                    
+                    # Store original formatting before text replacement
+                    original_font_name = run.font.name
+                    original_font_size = run.font.size
+                    original_bold = run.font.bold
+                    original_italic = run.font.italic
+                    original_underline = run.font.underline
+                    original_color = run.font.color.rgb if run.font.color and hasattr(run.font.color, 'rgb') else None
+                    
+                    # Replace text
                     run.text = segment.text
+                    
+                    # Restore formatting if it was reset
+                    if original_font_name and not run.font.name:
+                        run.font.name = original_font_name
+                    if original_font_size and not run.font.size:
+                        run.font.size = original_font_size
+                    if original_bold is not None and run.font.bold != original_bold:
+                        run.font.bold = original_bold
+                    if original_italic is not None and run.font.italic != original_italic:
+                        run.font.italic = original_italic
+                    if original_underline is not None and run.font.underline != original_underline:
+                        run.font.underline = original_underline
+                    if original_color and run.font.color:
+                        try:
+                            run.font.color.rgb = original_color
+                        except:
+                            pass
+                    
                     logger.debug(f"Replaced text in {segment_id}")
         
         # Process tables
@@ -113,8 +141,47 @@ class EnhancedDocxFormatter(IDocumentFormatter):
                     
                     if segment_id in segment_map:
                         segment = segment_map[segment_id]
-                        # Replace cell text while preserving cell formatting
-                        cell.text = segment.text
+                        
+                        # For table cells, preserve paragraph formatting
+                        if cell.paragraphs:
+                            # Get first paragraph
+                            first_para = cell.paragraphs[0]
+                            
+                            # Store formatting from first run if exists
+                            original_formatting = None
+                            if first_para.runs:
+                                first_run = first_para.runs[0]
+                                original_formatting = {
+                                    'font_name': first_run.font.name,
+                                    'font_size': first_run.font.size,
+                                    'bold': first_run.font.bold,
+                                    'italic': first_run.font.italic
+                                }
+                            
+                            # Clear existing runs
+                            for run in list(first_para.runs):
+                                run.text = ''
+                            
+                            # Add new text
+                            if first_para.runs:
+                                new_run = first_para.runs[0]
+                                new_run.text = segment.text
+                                
+                                # Restore formatting
+                                if original_formatting:
+                                    if original_formatting['font_name']:
+                                        new_run.font.name = original_formatting['font_name']
+                                    if original_formatting['font_size']:
+                                        new_run.font.size = original_formatting['font_size']
+                                    if original_formatting['bold'] is not None:
+                                        new_run.font.bold = original_formatting['bold']
+                                    if original_formatting['italic'] is not None:
+                                        new_run.font.italic = original_formatting['italic']
+                            else:
+                                new_run = first_para.add_run(segment.text)
+                                if original_formatting and original_formatting['font_name']:
+                                    new_run.font.name = original_formatting['font_name']
+                        
                         logger.debug(f"Replaced text in {segment_id}")
         
         # Process headers/footers
@@ -134,8 +201,23 @@ class EnhancedDocxFormatter(IDocumentFormatter):
             
             if segment_id in segment_map:
                 segment = segment_map[segment_id]
-                # Replace entire paragraph text
-                paragraph.text = segment.text
+                
+                # Preserve formatting from first run
+                if paragraph.runs:
+                    first_run = paragraph.runs[0]
+                    original_font = {
+                        'name': first_run.font.name,
+                        'size': first_run.font.size,
+                        'bold': first_run.font.bold
+                    }
+                    
+                    # Replace text in first run, clear others
+                    first_run.text = segment.text
+                    for run in paragraph.runs[1:]:
+                        run.text = ''
+                else:
+                    # Add new run with text
+                    paragraph.add_run(segment.text)
     
     def _build_segment_map(
         self,
@@ -535,3 +617,8 @@ class EnhancedDocxFormatter(IDocumentFormatter):
 class FormattingError(Exception):
     """Exception raised when formatting fails."""
     pass
+
+
+# Compatibility alias for existing code
+DocxFormatter = EnhancedDocxFormatter
+                    
