@@ -223,4 +223,93 @@ class ManagedSQLiteConnection:
 class ManagedFileHandle:
     """
     File handle with automatic cleanup.
-    Ensures files are
+    Ensures files are properly closed.
+    """
+    
+    def __init__(self, file_path: Path, mode: str = 'r', encoding: str = 'utf-8'):
+        self.file_path = Path(file_path)
+        self.mode = mode
+        self.encoding = encoding
+        self.handle = None
+        
+        # Register for cleanup
+        tracker = get_resource_tracker()
+        tracker.register(
+            self,
+            self.close,
+            f"file_{file_path.name}_{id(self)}"
+        )
+    
+    def open(self):
+        """Open file."""
+        if self.handle is None:
+            self.handle = open(self.file_path, self.mode, encoding=self.encoding)
+            logger.debug(f"Opened file: {self.file_path}")
+        return self.handle
+    
+    def close(self):
+        """Close file."""
+        if self.handle is not None:
+            try:
+                self.handle.close()
+                logger.debug(f"Closed file: {self.file_path}")
+            except Exception as e:
+                logger.error(f"Error closing file: {e}")
+            finally:
+                self.handle = None
+    
+    def read(self) -> str:
+        """Read file content."""
+        if self.handle is None:
+            self.open()
+        return self.handle.read()
+    
+    def write(self, content: str):
+        """Write content to file."""
+        if self.handle is None:
+            self.open()
+        self.handle.write(content)
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self.open()
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+    
+    def __del__(self):
+        """Cleanup on deletion."""
+        try:
+            self.close()
+        except Exception as e:
+            logger.error(f"Error in __del__: {e}")
+
+
+# Example usage
+if __name__ == "__main__":
+    # Test resource tracker
+    tracker = get_resource_tracker()
+    
+    # Test ManagedSQLiteConnection
+    with ManagedSQLiteConnection(Path("test.db")) as conn_mgr:
+        conn = conn_mgr.get_connection()
+        conn.execute("CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO test (name) VALUES (?)", ("test",))
+        print("✓ SQLite connection tested")
+    
+    # Test ManagedFileHandle
+    test_file = Path("test.txt")
+    with ManagedFileHandle(test_file, 'w') as f:
+        f.write("Hello, World!")
+    
+    with ManagedFileHandle(test_file, 'r') as f:
+        content = f.read()
+        print(f"✓ File handle tested: {content}")
+    
+    # Cleanup
+    test_file.unlink()
+    
+    # Check stats
+    stats = tracker.get_stats()
+    print(f"✓ Resource tracker stats: {stats}")
