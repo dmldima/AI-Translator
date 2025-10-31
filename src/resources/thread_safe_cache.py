@@ -1,5 +1,6 @@
 """
 Thread-safe data structures to prevent race conditions.
+FIXED: Syntax error in test code
 """
 import threading
 import time
@@ -117,6 +118,7 @@ class ThreadSafeLRUCache(Generic[T]):
                 return
             
             # Add new item
+            item = Cache
             item = CacheItem(
                 value=value,
                 created_at=now,
@@ -491,7 +493,7 @@ if __name__ == "__main__":
     cache.set("key3", "value3")
     
     assert cache.get("key1") == "value1"
-    assert cache.get("key2") == "value2")
+    assert cache.get("key2") == "value2"  # FIXED: Removed extra closing parenthesis
     
     # Test LRU eviction
     cache.set("key4", "value4")  # Should evict key3 (LRU)
