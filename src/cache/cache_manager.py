@@ -7,6 +7,7 @@ Changes:
 3. Uses ThreadSafeLRUCache for pattern cache
 4. Input validation for all user inputs
 5. No race conditions in pattern cache
+6. Fixed import paths
 """
 import hashlib
 import logging
@@ -15,11 +16,11 @@ from pathlib import Path
 from typing import Dict, Iterator, Optional, Any
 from dataclasses import dataclass, asdict
 
-# Import fixed utilities
-from secure_credentials import get_credential_store
-from input_validator import get_strict_validator
-from resource_manager import ManagedSQLiteConnection, get_resource_tracker
-from thread_safe_structures import ThreadSafeLRUCache
+# Import fixed utilities - CORRECTED PATHS
+from ..security.secure_credentials import get_credential_store
+from ..security.input_validation import get_strict_validator
+from ..resources.resource_manager import ManagedSQLiteConnection, get_resource_tracker
+from ..resources.thread_safe_cache import ThreadSafeLRUCache
 
 
 logger = logging.getLogger(__name__)
@@ -517,62 +518,3 @@ class CacheManager:
             self.close()
         except Exception as e:
             logger.error(f"Error in CacheManager.__del__: {e}")
-
-
-# Example usage
-if __name__ == "__main__":
-    from logging.handlers import RotatingFileHandler
-    
-    # Setup logging
-    logger = logging.getLogger("cache")
-    logger.setLevel(logging.DEBUG)
-    handler = RotatingFileHandler("cache.log", maxBytes=5_000_000, backupCount=5)
-    handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s'))
-    logger.addHandler(handler)
-    
-    # Create cache
-    config = CacheConfig(max_age_days=90, log_level="DEBUG")
-    storage = SQLiteStorage(Path("cache_fixed.db"), logger)
-    
-    with CacheManager(storage, config, logger) as cache:
-        # Test basic operations
-        entry = CacheEntry(
-            source="Hello, world!",
-            target="Привет, мир!",
-            source_lang="en",
-            target_lang="ru",
-            model="gpt-4",
-            glossary_version="v1.0",
-            domain="general"
-        )
-        
-        cache.set(entry)
-        print("✓ Stored entry")
-        
-        # Retrieve
-        retrieved = cache.get(
-            "Hello, world!", "en", "ru", "v1.0", "general"
-        )
-        print(f"✓ Retrieved: {retrieved.target if retrieved else None}")
-        
-        # Statistics
-        stats = cache.get_stats()
-        print(f"✓ Stats: hit_ratio={stats['hit_ratio']}%, entries={stats['total_entries']}")
-        
-        # Test validation (should fail)
-        try:
-            malicious_entry = CacheEntry(
-                source="; DROP TABLE cache--",
-                target="target",
-                source_lang="en",
-                target_lang="ru",
-                model="model",
-                glossary_version="v1",
-                domain="test"
-            )
-            cache.set(malicious_entry)
-            print("✗ FAILED: Should have blocked SQL injection")
-        except ValueError as e:
-            print(f"✓ Blocked malicious input: {str(e)[:50]}")
-    
-    print("\n✓ All critical issues fixed and tested!")
