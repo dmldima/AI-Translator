@@ -1,31 +1,38 @@
 """
-XLSX Document Formatter.
-Creates .xlsx files with preserved formatting.
+Enhanced XLSX Document Formatter with Complete Formatting Preservation.
+Handles merged cells, conditional formatting, and all cell properties.
 """
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 import logging
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from ..core.interfaces import IDocumentFormatter
-from ..core.models import (
-    Document,
-    TextSegment,
-    FileType
-)
+from ..core.models import Document, TextSegment, FileType
 
 
 logger = logging.getLogger(__name__)
 
 
-class XlsxFormatter(IDocumentFormatter):
-    """Formatter for Microsoft Excel .xlsx files."""
+class EnhancedXlsxFormatter(IDocumentFormatter):
+    """
+    Enhanced XLSX formatter with complete formatting preservation.
+    
+    Features:
+    - Preserves all cell formatting (font, fill, border, alignment)
+    - Preserves merged cells
+    - Preserves column widths and row heights
+    - Preserves conditional formatting
+    - Preserves cell protection
+    - Preserves formulas (where appropriate)
+    - Validates formatting preservation
+    """
     
     @property
     def supported_file_type(self) -> FileType:
-        """Supported file type."""
         return FileType.XLSX
     
     def format(
@@ -35,7 +42,7 @@ class XlsxFormatter(IDocumentFormatter):
         preserve_formatting: bool = True
     ) -> Path:
         """
-        Format and save translated spreadsheet.
+        Format and save translated spreadsheet with complete formatting preservation.
         
         Args:
             document: Document with translated segments
@@ -46,97 +53,167 @@ class XlsxFormatter(IDocumentFormatter):
             Path to saved document
         """
         try:
-            # Create new workbook
-            wb = Workbook()
+            logger.info(f"Formatting spreadsheet: {output_path.name}")
             
-            # Remove default sheet
-            if 'Sheet' in wb.sheetnames:
-                wb.remove(wb['Sheet'])
-            
-            # Apply metadata
-            self._apply_metadata(wb, document)
-            
-            # Group segments by sheet
-            sheets = self._group_by_sheet(document.segments)
-            
-            # Create sheets and write data
-            for sheet_name, segments in sheets.items():
-                ws = wb.create_sheet(title=sheet_name)
-                
-                # Write cells
-                for segment in segments:
-                    row = segment.position.row
-                    col = segment.position.column
-                    
-                    cell = ws.cell(row=row, column=col, value=segment.text)
-                    
-                    # Apply formatting
-                    if preserve_formatting and segment.cell_formatting:
-                        self._apply_cell_formatting(cell, ws, segment.cell_formatting)
+            if preserve_formatting:
+                # Load original workbook and replace text in-place
+                wb = load_workbook(
+                    document.file_path,
+                    data_only=False,  # Keep formulas
+                    keep_vba=True     # Keep macros
+                )
+                self._replace_text_in_place(wb, document.segments)
+            else:
+                # Create new workbook from scratch
+                wb = self._create_new_workbook(document)
             
             # Save workbook
             output_path.parent.mkdir(parents=True, exist_ok=True)
             wb.save(output_path)
             
-            logger.info(f"Saved formatted spreadsheet to: {output_path}")
+            # Validate formatting preservation
+            if preserve_formatting:
+                self._validate_formatting(document.file_path, output_path)
+            
+            logger.info(f"✓ Spreadsheet saved: {output_path}")
             return output_path
             
         except Exception as e:
-            logger.error(f"Failed to format spreadsheet: {e}")
-            raise FormattingError(f"Formatting failed: {e}")
+            logger.error(f"Formatting failed: {e}")
+            raise FormattingError(f"Failed to format spreadsheet: {e}")
     
-    def preserve_styles(
+    def _replace_text_in_place(
         self,
-        original: Document,
-        translated: Document
-    ) -> Document:
-        """Copy styles from original to translated."""
-        # Copy metadata
-        translated.metadata = original.metadata
-        translated.styles = original.styles
+        wb: Workbook,
+        segments: List[TextSegment]
+    ) -> None:
+        """
+        Replace text in original workbook while preserving all formatting.
+        This is the key method for formatting preservation.
+        """
+        # Build segment lookup by position
+        segment_map = self._build_segment_map(segments)
         
-        # Copy formatting from original segments
-        original_by_id = {s.id: s for s in original.segments}
-        
-        for segment in translated.segments:
-            if segment.id in original_by_id:
-                original_segment = original_by_id[segment.id]
-                segment.cell_formatting = original_segment.cell_formatting
-                segment.position = original_segment.position
-        
-        return translated
+        # Process all worksheets
+        for sheet in wb.worksheets:
+            sheet_name = sheet.title
+            
+            # Get merged cell ranges for this sheet
+            merged_ranges = self._get_merged_ranges(sheet)
+            
+            for row in sheet.iter_rows():
+                for cell in row:
+                    # Build segment ID
+                    segment_id = (
+                        f"sheet_{sheet_name}_row_{cell.row}_col_{cell.column}"
+                    )
+                    
+                    if segment_id in segment_map:
+                        segment = segment_map[segment_id]
+                        
+                        # Check if cell is part of merged range
+                        if self._is_merged_cell(cell, merged_ranges):
+                            # Only update top-left cell of merged range
+                            if self._is_topleft_of_merge(cell, merged_ranges):
+                                cell.value = segment.text
+                                logger.debug(
+                                    f"Updated merged cell {segment_id}"
+                                )
+                        else:
+                            # Regular cell - just replace value
+                            cell.value = segment.text
+                            logger.debug(f"Updated cell {segment_id}")
     
-    def validate_output(self, output_path: Path) -> bool:
-        """Validate output document."""
-        if not output_path.exists():
-            logger.error(f"Output file not found: {output_path}")
-            return False
-        
-        try:
-            from openpyxl import load_workbook
-            load_workbook(output_path, read_only=True)
-            return True
-        except Exception as e:
-            logger.error(f"Invalid output spreadsheet: {e}")
-            return False
+    def _get_merged_ranges(self, sheet: Worksheet) -> List[str]:
+        """Get list of merged cell ranges in sheet."""
+        return list(sheet.merged_cells.ranges)
     
-    def _apply_metadata(self, wb: Workbook, document: Document):
-        """Apply metadata to workbook."""
+    def _is_merged_cell(self, cell, merged_ranges: List) -> bool:
+        """Check if cell is part of a merged range."""
+        cell_coord = cell.coordinate
+        
+        for merged_range in merged_ranges:
+            if cell_coord in merged_range:
+                return True
+        
+        return False
+    
+    def _is_topleft_of_merge(self, cell, merged_ranges: List) -> bool:
+        """Check if cell is top-left corner of merged range."""
+        cell_coord = cell.coordinate
+        
+        for merged_range in merged_ranges:
+            # Top-left is the min_row, min_col
+            if cell_coord in merged_range:
+                top_left = sheet[merged_range.min_row][merged_range.min_col]
+                return cell.coordinate == top_left.coordinate
+        
+        return False
+    
+    def _build_segment_map(
+        self,
+        segments: List[TextSegment]
+    ) -> Dict[str, TextSegment]:
+        """Build lookup map of segments by ID."""
+        return {segment.id: segment for segment in segments}
+    
+    def _create_new_workbook(self, document: Document) -> Workbook:
+        """
+        Create new workbook from scratch (no formatting preservation).
+        Used only when preserve_formatting=False.
+        """
+        wb = Workbook()
+        
+        # Remove default sheet
+        if 'Sheet' in wb.sheetnames:
+            wb.remove(wb['Sheet'])
+        
+        # Apply metadata
+        if document.metadata:
+            self._apply_metadata(wb, document.metadata)
+        
+        # Group segments by sheet
+        sheets = self._group_by_sheet(document.segments)
+        
+        # Create sheets and write data
+        for sheet_name, segments in sheets.items():
+            ws = wb.create_sheet(title=sheet_name)
+            
+            for segment in segments:
+                row = segment.position.row
+                col = segment.position.column
+                
+                cell = ws.cell(row=row, column=col, value=segment.text)
+                
+                # Apply formatting if available
+                if segment.cell_formatting:
+                    self._apply_cell_formatting(
+                        cell,
+                        ws,
+                        segment.cell_formatting
+                    )
+        
+        return wb
+    
+    def _apply_metadata(self, wb: Workbook, metadata) -> None:
+        """Apply workbook metadata."""
         props = wb.properties
-        meta = document.metadata
         
-        if meta.title:
-            props.title = meta.title
-        if meta.author:
-            props.creator = meta.author
-        if meta.subject:
-            props.subject = meta.subject
-        if meta.keywords:
-            props.keywords = meta.keywords
-        if meta.comments:
-            props.description = meta.comments
+        if metadata.title:
+            props.title = metadata.title
+        if metadata.author:
+            props.creator = metadata.author
+        if metadata.subject:
+            props.subject = metadata.subject
+        if metadata.keywords:
+            props.keywords = metadata.keywords
+        if metadata.comments:
+            props.description = metadata.comments
     
-    def _group_by_sheet(self, segments: list) -> Dict[str, list]:
+    def _group_by_sheet(
+        self,
+        segments: List[TextSegment]
+    ) -> Dict[str, List[TextSegment]]:
         """Group segments by sheet name."""
         sheets = {}
         
@@ -150,10 +227,16 @@ class XlsxFormatter(IDocumentFormatter):
         
         return sheets
     
-    def _apply_cell_formatting(self, cell, ws, formatting):
-        """Apply formatting to cell."""
+    def _apply_cell_formatting(self, cell, ws: Worksheet, formatting) -> None:
+        """Apply comprehensive cell formatting."""
         # Font
-        if any([formatting.font_name, formatting.font_size, formatting.font_bold, formatting.font_italic, formatting.font_color]):
+        if any([
+            formatting.font_name,
+            formatting.font_size,
+            formatting.font_bold,
+            formatting.font_italic,
+            formatting.font_color
+        ]):
             font_kwargs = {}
             
             if formatting.font_name:
@@ -165,13 +248,12 @@ class XlsxFormatter(IDocumentFormatter):
             if formatting.font_italic:
                 font_kwargs['italic'] = True
             if formatting.font_color:
-                # Remove # from color
                 color = formatting.font_color.lstrip('#')
                 font_kwargs['color'] = color
             
             cell.font = Font(**font_kwargs)
         
-        # Fill
+        # Fill (background color)
         if formatting.fill_color:
             color = formatting.fill_color.lstrip('#')
             pattern = formatting.fill_pattern or 'solid'
@@ -182,7 +264,11 @@ class XlsxFormatter(IDocumentFormatter):
             )
         
         # Alignment
-        if any([formatting.horizontal_alignment, formatting.vertical_alignment, formatting.wrap_text]):
+        if any([
+            formatting.horizontal_alignment,
+            formatting.vertical_alignment,
+            formatting.wrap_text
+        ]):
             alignment_kwargs = {}
             
             if formatting.horizontal_alignment:
@@ -197,6 +283,7 @@ class XlsxFormatter(IDocumentFormatter):
         # Border
         if formatting.border_style:
             sides = {}
+            
             for position in ['top', 'bottom', 'left', 'right']:
                 style = formatting.border_style.get(position)
                 if style:
@@ -217,56 +304,137 @@ class XlsxFormatter(IDocumentFormatter):
         # Row height
         if formatting.row_height:
             ws.row_dimensions[cell.row].height = formatting.row_height
+    
+    def _validate_formatting(
+        self,
+        original_path: Path,
+        output_path: Path
+    ) -> bool:
+        """
+        Validate that formatting was preserved.
+        
+        Returns:
+            True if validation passed
+        """
+        try:
+            original_wb = load_workbook(original_path, data_only=False)
+            output_wb = load_workbook(output_path, data_only=False)
+            
+            # Compare structure
+            if len(original_wb.worksheets) != len(output_wb.worksheets):
+                logger.warning(
+                    f"Worksheet count mismatch: "
+                    f"{len(original_wb.worksheets)} vs {len(output_wb.worksheets)}"
+                )
+                return False
+            
+            validation_passed = True
+            
+            # Sample formatting checks on first sheet
+            if original_wb.worksheets and output_wb.worksheets:
+                orig_sheet = original_wb.worksheets[0]
+                out_sheet = output_wb.worksheets[0]
+                
+                # Check merged cells
+                orig_merged = set(str(r) for r in orig_sheet.merged_cells.ranges)
+                out_merged = set(str(r) for r in out_sheet.merged_cells.ranges)
+                
+                if orig_merged != out_merged:
+                    logger.warning(
+                        f"Merged cells mismatch: "
+                        f"{len(orig_merged)} vs {len(out_merged)}"
+                    )
+                    validation_passed = False
+                
+                # Sample cell formatting checks (first 5 rows, 5 cols)
+                for row in range(1, min(6, orig_sheet.max_row + 1)):
+                    for col in range(1, min(6, orig_sheet.max_column + 1)):
+                        orig_cell = orig_sheet.cell(row, col)
+                        out_cell = out_sheet.cell(row, col)
+                        
+                        # Check font
+                        if orig_cell.font.name != out_cell.font.name:
+                            logger.warning(
+                                f"Font mismatch at ({row},{col}): "
+                                f"{orig_cell.font.name} vs {out_cell.font.name}"
+                            )
+                            validation_passed = False
+                        
+                        # Check fill
+                        if orig_cell.fill.start_color != out_cell.fill.start_color:
+                            logger.warning(
+                                f"Fill color mismatch at ({row},{col})"
+                            )
+                            validation_passed = False
+                
+                # Check column widths
+                for col_letter in ['A', 'B', 'C', 'D', 'E']:
+                    orig_width = orig_sheet.column_dimensions[col_letter].width
+                    out_width = out_sheet.column_dimensions[col_letter].width
+                    
+                    if orig_width != out_width:
+                        logger.warning(
+                            f"Column width mismatch for {col_letter}: "
+                            f"{orig_width} vs {out_width}"
+                        )
+                        validation_passed = False
+            
+            if validation_passed:
+                logger.info("✓ Formatting validation passed")
+            else:
+                logger.warning("⚠ Formatting validation found differences")
+            
+            return validation_passed
+            
+        except Exception as e:
+            logger.error(f"Formatting validation failed: {e}")
+            return False
+    
+    def preserve_styles(
+        self,
+        original: Document,
+        translated: Document
+    ) -> Document:
+        """
+        Copy styles from original to translated.
+        Used when creating a new document.
+        """
+        translated.metadata = original.metadata
+        translated.styles = original.styles
+        
+        # Copy formatting from original segments
+        original_by_id = {s.id: s for s in original.segments}
+        
+        for segment in translated.segments:
+            if segment.id in original_by_id:
+                original_segment = original_by_id[segment.id]
+                segment.cell_formatting = original_segment.cell_formatting
+                segment.position = original_segment.position
+        
+        return translated
+    
+    def validate_output(self, output_path: Path) -> bool:
+        """
+        Validate output spreadsheet can be opened.
+        
+        Args:
+            output_path: Path to output document
+            
+        Returns:
+            True if valid
+        """
+        if not output_path.exists():
+            logger.error(f"Output file not found: {output_path}")
+            return False
+        
+        try:
+            load_workbook(output_path, read_only=True)
+            return True
+        except Exception as e:
+            logger.error(f"Invalid output spreadsheet: {e}")
+            return False
 
 
 class FormattingError(Exception):
     """Exception raised when formatting fails."""
     pass
-
-
-# ===== Example Usage =====
-
-if __name__ == "__main__":
-    from pathlib import Path
-    from ..parsers.xlsx_parser import XlsxParser
-    from ..core.models import TextSegment, SegmentType, SegmentPosition
-    
-    parser = XlsxParser()
-    formatter = XlsxFormatter()
-    
-    test_file = Path("test_spreadsheet.xlsx")
-    if test_file.exists():
-        # Parse
-        original_doc = parser.parse(test_file)
-        print(f"Parsed: {len(original_doc.segments)} segments")
-        
-        # Simulate translation
-        translated_doc = Document(
-            file_path=Path("test_translated.xlsx"),
-            file_type=FileType.XLSX,
-            segments=[],
-            metadata=original_doc.metadata,
-            styles=original_doc.styles
-        )
-        
-        for segment in original_doc.segments:
-            translated_segment = TextSegment(
-                id=segment.id,
-                text=segment.text + " [TRANSLATED]",
-                segment_type=segment.segment_type,
-                position=segment.position,
-                cell_formatting=segment.cell_formatting
-            )
-            translated_doc.segments.append(translated_segment)
-        
-        # Format and save
-        output_path = Path("test_translated.xlsx")
-        formatter.format(translated_doc, output_path, preserve_formatting=True)
-        
-        # Validate
-        if formatter.validate_output(output_path):
-            print(f"✓ Successfully created: {output_path}")
-        else:
-            print(f"✗ Failed to create valid spreadsheet")
-    else:
-        print(f"Test file not found: {test_file}")
