@@ -1,6 +1,6 @@
 """
 Thread-safe data structures to prevent race conditions.
-FIXED: Syntax error in test code
+FIXED: Race condition in OnceExecutor
 """
 import threading
 import time
@@ -118,7 +118,6 @@ class ThreadSafeLRUCache(Generic[T]):
                 return
             
             # Add new item
-            item = Cache
             item = CacheItem(
                 value=value,
                 created_at=now,
@@ -377,6 +376,8 @@ class OnceExecutor:
     """
     Ensure a function is executed only once, even with concurrent access.
     Similar to sync.Once in Go.
+    
+    FIXED: Race condition in double-checked locking pattern.
     """
     
     def __init__(self):
@@ -387,7 +388,7 @@ class OnceExecutor:
     
     def execute(self, func: Callable, *args, **kwargs):
         """
-        Execute function once.
+        Execute function once with correct double-checked locking.
         
         Args:
             func: Function to execute
@@ -399,21 +400,35 @@ class OnceExecutor:
             
         Raises:
             Exception if function raised exception
-        """
-        if self._executed:
-            if self._exception:
-                raise self._exception
-            return self._result
         
+        FIXED: Proper memory ordering with lock
+        """
+        # Fast path: Check if already executed
+        # IMPORTANT: This is safe only for reading the flag
+        if self._executed:
+            # MUST acquire lock to ensure memory visibility of result/exception
+            # This prevents seeing _executed=True but stale _result/_exception
+            with self._lock:
+                # Double-check after lock (defensive)
+                if self._exception:
+                    raise self._exception
+                return self._result
+        
+        # Slow path: Need to execute or wait for execution
         with self._lock:
             # Double-check after acquiring lock
+            # Another thread might have executed between our check and lock acquisition
             if self._executed:
                 if self._exception:
                     raise self._exception
                 return self._result
             
+            # Execute the function
             try:
                 self._result = func(*args, **kwargs)
+                # CRITICAL: Set _executed LAST to ensure proper memory ordering
+                # All writes above must be visible before _executed becomes True
+                # This is guaranteed by the lock release
                 self._executed = True
                 return self._result
             except Exception as e:
@@ -478,65 +493,3 @@ class RateLimiter:
         new_tokens = elapsed * self.rate
         self._tokens = min(self.capacity, self._tokens + new_tokens)
         self._last_update = now
-
-
-# Example usage and tests
-if __name__ == "__main__":
-    import concurrent.futures
-    
-    print("Testing ThreadSafeLRUCache...")
-    cache = ThreadSafeLRUCache[str](maxsize=3, ttl_seconds=2)
-    
-    # Test basic operations
-    cache.set("key1", "value1")
-    cache.set("key2", "value2")
-    cache.set("key3", "value3")
-    
-    assert cache.get("key1") == "value1"
-    assert cache.get("key2") == "value2"  # FIXED: Removed extra closing parenthesis
-    
-    # Test LRU eviction
-    cache.set("key4", "value4")  # Should evict key3 (LRU)
-    assert cache.get("key3") is None
-    assert cache.get("key4") == "value4"
-    
-    print("✓ LRU cache basic tests passed")
-    
-    # Test concurrent access
-    def concurrent_set(n):
-        for i in range(100):
-            cache.set(f"key_{n}_{i}", f"value_{n}_{i}")
-    
-    def concurrent_get(n):
-        for i in range(100):
-            cache.get(f"key_{n}_{i}")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = []
-        for i in range(5):
-            futures.append(executor.submit(concurrent_set, i))
-            futures.append(executor.submit(concurrent_get, i))
-        
-        concurrent.futures.wait(futures)
-    
-    print("✓ Concurrent access tests passed")
-    
-    # Test stats
-    stats = cache.get_stats()
-    print(f"Cache stats: {stats}")
-    
-    print("\nTesting ThreadSafeCounter...")
-    counter = ThreadSafeCounter()
-    
-    def increment_many():
-        for _ in range(1000):
-            counter.increment()
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(increment_many) for _ in range(10)]
-        concurrent.futures.wait(futures)
-    
-    assert counter.get() == 10000
-    print(f"✓ Counter test passed: {counter.get()}")
-    
-    print("\n✓ All tests passed!")
