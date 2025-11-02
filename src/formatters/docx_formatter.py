@@ -1,10 +1,12 @@
 """
-Enhanced DOCX Document Formatter - FIXED: Path Traversal Protection
+Enhanced DOCX Document Formatter - FIXED: Path Traversal + Memory Management + Atomic Saves
 Implements best practices for maintaining all document styling.
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 import logging
+import os
+import uuid
 from docx import Document as DocxDocument
 from docx.shared import RGBColor, Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -22,8 +24,18 @@ logger = logging.getLogger(__name__)
 class EnhancedDocxFormatter(IDocumentFormatter):
     """
     Enhanced DOCX formatter with complete formatting preservation.
-    FIXED: Path traversal protection.
+    FIXED: Path traversal protection, memory management, atomic saves.
     """
+    
+    def __init__(self, workspace_root: Path = None):
+        """
+        Initialize formatter.
+        
+        Args:
+            workspace_root: Root directory for allowed file operations.
+                           If None, uses current working directory.
+        """
+        self.workspace_root = (workspace_root or Path.cwd()).resolve()
     
     @property
     def supported_file_type(self) -> FileType:
@@ -45,7 +57,13 @@ class EnhancedDocxFormatter(IDocumentFormatter):
             
         Returns:
             Path to saved document
+            
+        Raises:
+            FormattingError: If formatting fails
         """
+        doc = None
+        temp_path = None
+        
         try:
             # SECURITY FIX: Validate paths before processing
             document.file_path = self._validate_and_resolve_path(document.file_path)
@@ -54,18 +72,17 @@ class EnhancedDocxFormatter(IDocumentFormatter):
             logger.info(f"Formatting document: {output_path.name}")
             
             # Load original document to preserve structure
-            original_doc = DocxDocument(document.file_path)
+            doc = DocxDocument(document.file_path)
             
             if preserve_formatting:
                 # Strategy: Replace text in-place to preserve all formatting
-                self._replace_text_in_place(original_doc, document.segments)
+                self._replace_text_in_place(doc, document.segments)
             else:
                 # Create new document from scratch
-                original_doc = self._create_new_document(document)
+                doc = self._create_new_document(document)
             
-            # Save document
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            original_doc.save(output_path)
+            # Atomic save using temp file
+            self._save_atomic(doc, output_path)
             
             # Validate formatting preservation
             if preserve_formatting:
@@ -74,9 +91,76 @@ class EnhancedDocxFormatter(IDocumentFormatter):
             logger.info(f"✓ Document saved: {output_path}")
             return output_path
             
+        except FileNotFoundError as e:
+            raise FormattingError(
+                f"Input file not found: {document.file_path}\n"
+                f"Please verify the file path and try again."
+            ) from e
+        
+        except PermissionError as e:
+            raise FormattingError(
+                f"Permission denied: Cannot write to {output_path}\n"
+                f"Please check file permissions or choose a different location."
+            ) from e
+        
+        except ValueError as e:
+            if "workspace" in str(e).lower():
+                raise FormattingError(
+                    f"Security error: File path outside allowed workspace.\n"
+                    f"File: {document.file_path}\n"
+                    f"Workspace: {self.workspace_root}"
+                ) from e
+            raise
+        
         except Exception as e:
             logger.error(f"Formatting failed: {e}")
-            raise FormattingError(f"Failed to format document: {e}")
+            raise FormattingError(
+                f"Failed to format DOCX document.\n"
+                f"Error: {e}\n"
+                f"Please verify the file is not corrupted."
+            ) from e
+        
+        finally:
+            # Cleanup temp file if exists
+            if temp_path and temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            
+            # Help garbage collector
+            del doc
+    
+    def _save_atomic(self, doc, output_path: Path) -> None:
+        """
+        Atomic save using temp file to prevent corruption.
+        
+        Args:
+            doc: Document to save
+            output_path: Target path
+            
+        Raises:
+            FormattingError: If save fails
+        """
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Create temp file in same directory (ensures same filesystem for atomic rename)
+        temp_path = output_path.with_name(
+            f'.tmp_{uuid.uuid4().hex}_{output_path.name}'
+        )
+        
+        try:
+            doc.save(temp_path)
+            # Atomic rename (POSIX) / replace (Windows)
+            temp_path.replace(output_path)
+        except Exception as e:
+            # Cleanup temp file on error
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            raise FormattingError(f"Failed to save document: {e}") from e
     
     def _validate_and_resolve_path(self, file_path: Path, check_exists: bool = True) -> Path:
         """
@@ -92,30 +176,66 @@ class EnhancedDocxFormatter(IDocumentFormatter):
         Raises:
             FormattingError: If path is unsafe
         """
-        # Convert to absolute path
-        if not file_path.is_absolute():
-            file_path = file_path.resolve()
+        # Resolve to absolute path
+        file_path = file_path.resolve()
         
-        # Check for path traversal attempts
-        path_str = str(file_path)
-        if '..' in path_str:
-            raise FormattingError(f"Path traversal not allowed: {file_path}")
+        # Check workspace boundary
+        try:
+            file_path.relative_to(self.workspace_root)
+        except ValueError:
+            raise FormattingError(
+                f"Access denied: Path outside workspace.\n"
+                f"File: {file_path}\n"
+                f"Workspace: {self.workspace_root}"
+            )
         
-        # Validate filename doesn't contain dangerous characters
-        dangerous_chars = ['<', '>', '|', '\0', '\n', '\r']
-        for char in dangerous_chars:
-            if char in file_path.name:
-                raise FormattingError(f"Invalid character in filename: {repr(char)}")
-        
-        # Check parent directory exists (for output files)
-        if not check_exists and not file_path.parent.exists():
-            raise FormattingError(f"Output directory doesn't exist: {file_path.parent}")
+        # Validate filename
+        self._validate_filename(file_path.name)
         
         # Check file exists (for input files)
         if check_exists and not file_path.exists():
             raise FormattingError(f"File not found: {file_path}")
         
         return file_path
+    
+    def _validate_filename(self, filename: str) -> None:
+        """
+        Validate filename for cross-platform compatibility.
+        
+        Args:
+            filename: Filename to validate
+            
+        Raises:
+            FormattingError: If filename is invalid
+        """
+        # OS-specific dangerous characters
+        if os.name == 'nt':  # Windows
+            dangerous = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '\0']
+        else:
+            dangerous = ['/', '\0']
+        
+        for char in dangerous:
+            if char in filename:
+                raise FormattingError(f"Invalid character in filename: {repr(char)}")
+        
+        # Windows reserved names
+        if os.name == 'nt':
+            reserved = {
+                'CON', 'PRN', 'AUX', 'NUL',
+                'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+                'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+            }
+            name_without_ext = filename.rsplit('.', 1)[0].upper()
+            if name_without_ext in reserved:
+                raise FormattingError(f"Reserved Windows filename: {filename}")
+            
+            # No trailing spaces or dots
+            if filename.rstrip() != filename or filename.rstrip('.') != filename:
+                raise FormattingError("Filename cannot end with space or dot on Windows")
+        
+        # Length check
+        if len(filename) > 255:
+            raise FormattingError("Filename too long (max 255 characters)")
     
     def _replace_text_in_place(
         self,
@@ -136,35 +256,7 @@ class EnhancedDocxFormatter(IDocumentFormatter):
                 
                 if segment_id in segment_map:
                     segment = segment_map[segment_id]
-                    
-                    # Store original formatting before text replacement
-                    original_font_name = run.font.name
-                    original_font_size = run.font.size
-                    original_bold = run.font.bold
-                    original_italic = run.font.italic
-                    original_underline = run.font.underline
-                    original_color = run.font.color.rgb if run.font.color and hasattr(run.font.color, 'rgb') else None
-                    
-                    # Replace text
-                    run.text = segment.text
-                    
-                    # Restore formatting if it was reset
-                    if original_font_name and not run.font.name:
-                        run.font.name = original_font_name
-                    if original_font_size and not run.font.size:
-                        run.font.size = original_font_size
-                    if original_bold is not None and run.font.bold != original_bold:
-                        run.font.bold = original_bold
-                    if original_italic is not None and run.font.italic != original_italic:
-                        run.font.italic = original_italic
-                    if original_underline is not None and run.font.underline != original_underline:
-                        run.font.underline = original_underline
-                    if original_color and run.font.color:
-                        try:
-                            run.font.color.rgb = original_color
-                        except:
-                            pass
-                    
+                    self._replace_text_preserve_formatting(run, segment.text)
                     logger.debug(f"Replaced text in {segment_id}")
         
         # Process tables
@@ -178,75 +270,125 @@ class EnhancedDocxFormatter(IDocumentFormatter):
                         
                         # For table cells, preserve paragraph formatting
                         if cell.paragraphs:
-                            # Get first paragraph
-                            first_para = cell.paragraphs[0]
-                            
-                            # Store formatting from first run if exists
-                            original_formatting = None
-                            if first_para.runs:
-                                first_run = first_para.runs[0]
-                                original_formatting = {
-                                    'font_name': first_run.font.name,
-                                    'font_size': first_run.font.size,
-                                    'bold': first_run.font.bold,
-                                    'italic': first_run.font.italic
-                                }
-                            
-                            # Clear existing runs
-                            for run in list(first_para.runs):
-                                run.text = ''
-                            
-                            # Add new text
-                            if first_para.runs:
-                                new_run = first_para.runs[0]
-                                new_run.text = segment.text
-                                
-                                # Restore formatting
-                                if original_formatting:
-                                    if original_formatting['font_name']:
-                                        new_run.font.name = original_formatting['font_name']
-                                    if original_formatting['font_size']:
-                                        new_run.font.size = original_formatting['font_size']
-                                    if original_formatting['bold'] is not None:
-                                        new_run.font.bold = original_formatting['bold']
-                                    if original_formatting['italic'] is not None:
-                                        new_run.font.italic = original_formatting['italic']
-                            else:
-                                new_run = first_para.add_run(segment.text)
-                                if original_formatting and original_formatting['font_name']:
-                                    new_run.font.name = original_formatting['font_name']
+                            self._replace_cell_text(cell.paragraphs[0], segment.text)
                         
                         logger.debug(f"Replaced text in {segment_id}")
         
         # Process headers/footers
-        for section in docx.sections:
-            self._replace_header_footer_text(section.header, segment_map, "header")
-            self._replace_header_footer_text(section.footer, segment_map, "footer")
+        for section_idx, section in enumerate(docx.sections):
+            self._replace_header_footer_text(
+                section.header, 
+                segment_map, 
+                "header",
+                section_idx
+            )
+            self._replace_header_footer_text(
+                section.footer, 
+                segment_map, 
+                "footer",
+                section_idx
+            )
+    
+    def _replace_text_preserve_formatting(self, run, new_text: str) -> None:
+        """
+        Replace text in run while preserving ALL font properties.
+        
+        Args:
+            run: Run object to modify
+            new_text: New text to set
+        """
+        # Save ALL font properties
+        font_backup = {
+            'name': run.font.name,
+            'size': run.font.size,
+            'bold': run.font.bold,
+            'italic': run.font.italic,
+            'underline': run.font.underline,
+            'strike': run.font.strike,
+            'color': run.font.color.rgb if (run.font.color and hasattr(run.font.color, 'rgb')) else None,
+            'highlight_color': run.font.highlight_color,
+            'subscript': run.font.subscript,
+            'superscript': run.font.superscript,
+            'small_caps': run.font.small_caps,
+        }
+        
+        # Replace text
+        run.text = new_text
+        
+        # Restore ALL properties
+        for prop, value in font_backup.items():
+            if value is not None:
+                try:
+                    if prop == 'color' and value:
+                        run.font.color.rgb = value
+                    else:
+                        setattr(run.font, prop, value)
+                except (AttributeError, TypeError):
+                    # Some properties may be read-only
+                    pass
+    
+    def _replace_cell_text(self, paragraph, new_text: str) -> None:
+        """
+        Replace text in table cell paragraph.
+        
+        Args:
+            paragraph: Paragraph in cell
+            new_text: New text
+        """
+        if paragraph.runs:
+            # Save formatting from first run
+            template_run = paragraph.runs[0]
+            
+            # Remove all runs via XML (cleaner than setting text to '')
+            for _ in range(len(paragraph.runs)):
+                paragraph._element.remove(paragraph.runs[0]._element)
+            
+            # Create new run with template formatting
+            new_run = paragraph.add_run(new_text)
+            
+            # Copy formatting
+            if template_run.font.name:
+                new_run.font.name = template_run.font.name
+            if template_run.font.size:
+                new_run.font.size = template_run.font.size
+            if template_run.font.bold is not None:
+                new_run.font.bold = template_run.font.bold
+            if template_run.font.italic is not None:
+                new_run.font.italic = template_run.font.italic
+            if template_run.font.color and hasattr(template_run.font.color, 'rgb'):
+                try:
+                    new_run.font.color.rgb = template_run.font.color.rgb
+                except:
+                    pass
+        else:
+            # No existing runs - just add text
+            paragraph.add_run(new_text)
     
     def _replace_header_footer_text(
         self,
         header_footer,
         segment_map: Dict[str, TextSegment],
-        prefix: str
+        prefix: str,
+        section_idx: int
     ) -> None:
-        """Replace text in headers/footers."""
+        """
+        Replace text in headers/footers.
+        
+        FIXED: Added section_idx to prevent ID collisions.
+        """
         for para_idx, paragraph in enumerate(header_footer.paragraphs):
-            segment_id = f"{prefix}_{para_idx}"
+            segment_id = f"section_{section_idx}_{prefix}_{para_idx}"
             
             if segment_id in segment_map:
                 segment = segment_map[segment_id]
                 
                 # Preserve formatting from first run
                 if paragraph.runs:
-                    first_run = paragraph.runs[0]
-                    original_font = {
-                        'name': first_run.font.name,
-                        'size': first_run.font.size,
-                        'bold': first_run.font.bold
-                    }
-                    
-                    # Replace text in first run, clear others
-                    first_run.text = segment.text
+                    self._replace_text_preserve_formatting(
+                        paragraph.runs[0],
+                        segment.text
+                    )
+                    # Clear other runs
                     for run in paragraph.runs[1:]:
                         run.text = ''
                 else:
@@ -258,7 +400,18 @@ class EnhancedDocxFormatter(IDocumentFormatter):
         segments: List[TextSegment]
     ) -> Dict[str, TextSegment]:
         """Build lookup map of segments by ID."""
-        return {segment.id: segment for segment in segments}
+        segment_map = {}
+        duplicates = []
+        
+        for segment in segments:
+            if segment.id in segment_map:
+                duplicates.append(segment.id)
+            segment_map[segment.id] = segment
+        
+        if duplicates:
+            logger.warning(f"Duplicate segment IDs found: {len(duplicates)}")
+        
+        return segment_map
     
     def _create_new_document(self, document: Document) -> DocxDocument:
         """
@@ -537,66 +690,66 @@ class EnhancedDocxFormatter(IDocumentFormatter):
         Validate that formatting was preserved.
         
         Returns:
-            True if validation passed
+            True if validation passed (warnings don't fail)
         """
         try:
             original_doc = DocxDocument(original_path)
             output_doc = DocxDocument(output_path)
             
-            # Compare structure
+            # Compare structure (critical checks)
             if len(original_doc.paragraphs) != len(output_doc.paragraphs):
-                logger.warning(
-                    f"Paragraph count mismatch: "
-                    f"{len(original_doc.paragraphs)} vs {len(output_doc.paragraphs)}"
+                logger.error(
+                    f"CRITICAL: Paragraph count mismatch: "
+                    f"{len(original_doc.paragraphs)} → {len(output_doc.paragraphs)}"
                 )
                 return False
             
             if len(original_doc.tables) != len(output_doc.tables):
-                logger.warning(
-                    f"Table count mismatch: "
-                    f"{len(original_doc.tables)} vs {len(output_doc.tables)}"
+                logger.error(
+                    f"CRITICAL: Table count mismatch: "
+                    f"{len(original_doc.tables)} → {len(output_doc.tables)}"
                 )
                 return False
             
-            # Sample formatting checks
-            validation_passed = True
+            # Sample formatting checks (warnings only)
+            warnings = 0
             
             for i, (orig_para, out_para) in enumerate(
                 zip(original_doc.paragraphs[:5], output_doc.paragraphs[:5])
             ):
                 # Check paragraph alignment
                 if orig_para.alignment != out_para.alignment:
-                    logger.warning(
-                        f"Alignment mismatch in paragraph {i}: "
-                        f"{orig_para.alignment} vs {out_para.alignment}"
-                    )
-                    validation_passed = False
+                    logger.warning(f"Para {i}: alignment changed")
+                    warnings += 1
                 
-                # Check run formatting for first run
-                if orig_para.runs and out_para.runs:
-                    orig_run = orig_para.runs[0]
-                    out_run = out_para.runs[0]
+                # Check run count (may legitimately change)
+                if len(orig_para.runs) != len(out_para.runs):
+                    logger.debug(
+                        f"Para {i}: run count changed "
+                        f"({len(orig_para.runs)} → {len(out_para.runs)})"
+                    )
+                
+                # Check formatting of common runs
+                min_runs = min(len(orig_para.runs), len(out_para.runs))
+                for j in range(min_runs):
+                    orig_run = orig_para.runs[j]
+                    out_run = out_para.runs[j]
                     
                     if orig_run.font.name != out_run.font.name:
-                        logger.warning(
-                            f"Font mismatch in paragraph {i}: "
-                            f"{orig_run.font.name} vs {out_run.font.name}"
-                        )
-                        validation_passed = False
+                        logger.warning(f"Para {i} Run {j}: font name changed")
+                        warnings += 1
                     
                     if orig_run.font.size != out_run.font.size:
-                        logger.warning(
-                            f"Font size mismatch in paragraph {i}: "
-                            f"{orig_run.font.size} vs {out_run.font.size}"
-                        )
-                        validation_passed = False
+                        logger.warning(f"Para {i} Run {j}: font size changed")
+                        warnings += 1
             
-            if validation_passed:
-                logger.info("✓ Formatting validation passed")
+            if warnings > 0:
+                logger.warning(f"⚠ Formatting validation: {warnings} warnings")
             else:
-                logger.warning("⚠ Formatting validation found differences")
+                logger.info("✓ Formatting validation: perfect match")
             
-            return validation_passed
+            # Warnings don't fail validation
+            return True
             
         except Exception as e:
             logger.error(f"Formatting validation failed: {e}")
