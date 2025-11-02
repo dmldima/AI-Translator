@@ -1,5 +1,5 @@
 """
-XLSX Document Parser.
+XLSX Document Parser - FIXED: Path Traversal Protection
 Extracts text and formatting from Excel .xlsx files.
 """
 from pathlib import Path
@@ -38,6 +38,9 @@ class XlsxParser(IDocumentParser):
     
     def validate_document(self, file_path: Path) -> bool:
         """Validate document before parsing."""
+        # SECURITY FIX: Validate path to prevent path traversal
+        file_path = self._validate_and_resolve_path(file_path)
+        
         if not file_path.exists():
             logger.error(f"File not found: {file_path}")
             return False
@@ -63,6 +66,9 @@ class XlsxParser(IDocumentParser):
         Returns:
             Document with extracted content and formatting
         """
+        # SECURITY FIX: Validate path first
+        file_path = self._validate_and_resolve_path(file_path)
+        
         if not self.validate_document(file_path):
             raise ParsingError(f"Invalid document: {file_path}")
         
@@ -116,6 +122,36 @@ class XlsxParser(IDocumentParser):
         
         logger.info(f"Extracted {len(segments)} translatable segments")
         return segments
+    
+    def _validate_and_resolve_path(self, file_path: Path) -> Path:
+        """
+        SECURITY: Validate and resolve file path to prevent path traversal.
+        
+        Args:
+            file_path: Input path
+            
+        Returns:
+            Resolved absolute path
+            
+        Raises:
+            ParsingError: If path is unsafe
+        """
+        # Convert to absolute path
+        if not file_path.is_absolute():
+            file_path = file_path.resolve()
+        
+        # Check for path traversal attempts
+        path_str = str(file_path)
+        if '..' in path_str:
+            raise ParsingError(f"Path traversal not allowed: {file_path}")
+        
+        # Validate filename doesn't contain dangerous characters
+        dangerous_chars = ['<', '>', '|', '\0', '\n', '\r']
+        for char in dangerous_chars:
+            if char in file_path.name:
+                raise ParsingError(f"Invalid character in filename: {repr(char)}")
+        
+        return file_path
     
     def _extract_metadata(self, wb) -> DocumentMetadata:
         """Extract workbook metadata."""
@@ -256,34 +292,3 @@ class XlsxParser(IDocumentParser):
 class ParsingError(Exception):
     """Exception raised when parsing fails."""
     pass
-
-
-# ===== Example Usage =====
-
-if __name__ == "__main__":
-    from pathlib import Path
-    
-    parser = XlsxParser()
-    
-    test_file = Path("test_spreadsheet.xlsx")
-    if test_file.exists():
-        document = parser.parse(test_file)
-        
-        print(f"Document: {document.file_path.name}")
-        print(f"Total segments: {len(document.segments)}")
-        print(f"Total words: {document.total_words}")
-        print(f"Translatable segments: {document.translatable_segments}")
-        
-        print(f"\nMetadata:")
-        print(f"  Title: {document.metadata.title}")
-        print(f"  Author: {document.metadata.author}")
-        
-        print(f"\nFirst 3 segments:")
-        for segment in document.segments[:3]:
-            print(f"  [{segment.id}] {segment.text}")
-            if segment.cell_formatting:
-                fmt = segment.cell_formatting
-                print(f"    Font: {fmt.font_name}, Size: {fmt.font_size}, Bold: {fmt.font_bold}")
-                print(f"    Position: Sheet={segment.position.sheet_name}, Row={segment.position.row}, Col={segment.position.column}")
-    else:
-        print(f"Test file not found: {test_file}")
