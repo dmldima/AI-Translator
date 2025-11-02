@@ -1,7 +1,6 @@
 """
 Core interfaces for the translation system.
-Defines abstract interfaces that all components must implement.
-Includes adapter classes for integrating existing modules.
+UPDATED: Added batch operations support
 """
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -21,10 +20,7 @@ from .models import (
 # ===== Translation Engine Interface =====
 
 class ITranslationEngine(ABC):
-    """
-    Interface for translation engines.
-    All translation engines (OpenAI, DeepL, etc.) must implement this.
-    """
+    """Interface for translation engines."""
     
     @property
     @abstractmethod
@@ -46,18 +42,7 @@ class ITranslationEngine(ABC):
         target_lang: str,
         context: Optional[str] = None
     ) -> str:
-        """
-        Translate single text.
-        
-        Args:
-            text: Text to translate
-            source_lang: Source language code
-            target_lang: Target language code
-            context: Optional context for better translation
-            
-        Returns:
-            Translated text
-        """
+        """Translate single text."""
         pass
     
     @abstractmethod
@@ -68,62 +53,27 @@ class ITranslationEngine(ABC):
         target_lang: str,
         contexts: Optional[List[str]] = None
     ) -> List[str]:
-        """
-        Translate multiple texts in batch.
-        
-        Args:
-            texts: List of texts to translate
-            source_lang: Source language code
-            target_lang: Target language code
-            contexts: Optional contexts for each text
-            
-        Returns:
-            List of translated texts
-        """
+        """Translate multiple texts in batch."""
         pass
     
     @abstractmethod
     def get_supported_languages(self) -> List[str]:
-        """
-        Get list of supported language codes.
-        
-        Returns:
-            List of language codes
-        """
+        """Get list of supported language codes."""
         pass
     
     @abstractmethod
     def is_language_pair_supported(self, source_lang: str, target_lang: str) -> bool:
-        """
-        Check if language pair is supported.
-        
-        Args:
-            source_lang: Source language code
-            target_lang: Target language code
-            
-        Returns:
-            True if supported
-        """
+        """Check if language pair is supported."""
         pass
     
     @abstractmethod
     def get_usage_stats(self) -> Dict[str, Any]:
-        """
-        Get usage statistics.
-        
-        Returns:
-            Dict with usage metrics (tokens, requests, cost, etc.)
-        """
+        """Get usage statistics."""
         pass
     
     @abstractmethod
     def validate_config(self) -> bool:
-        """
-        Validate engine configuration.
-        
-        Returns:
-            True if configuration is valid
-        """
+        """Validate engine configuration."""
         pass
 
 
@@ -132,6 +82,7 @@ class ITranslationEngine(ABC):
 class ITranslationCache(ABC):
     """
     Interface for translation cache systems.
+    UPDATED: Added batch operations for optimization.
     """
     
     @abstractmethod
@@ -158,46 +109,62 @@ class ITranslationCache(ABC):
         """
         pass
     
-    @abstractmethod
-    def invalidate(self, glossary_version: str) -> int:
+    # NEW: Batch operations for optimization
+    def get_batch(self, requests: List[TranslationRequest]) -> Dict[TranslationRequest, TranslationResult]:
         """
-        Invalidate cache entries for specific glossary version.
+        OPTIMIZATION: Retrieve multiple cached translations in one operation.
         
         Args:
-            glossary_version: Version to invalidate
+            requests: List of translation requests
             
         Returns:
-            Number of entries invalidated
+            Dict mapping request -> result (only for found items)
+        
+        Note:
+            Default implementation falls back to individual get() calls.
+            Subclasses should override for better performance.
         """
+        results = {}
+        for request in requests:
+            result = self.get(request)
+            if result:
+                results[request] = result
+        return results
+    
+    def set_batch(self, items: List[tuple[TranslationRequest, TranslationResult]]) -> None:
+        """
+        OPTIMIZATION: Store multiple translations in one operation.
+        
+        Args:
+            items: List of (request, result) tuples
+        
+        Note:
+            Default implementation falls back to individual set() calls.
+            Subclasses should override for better performance.
+        """
+        for request, result in items:
+            self.set(request, result)
+    
+    @abstractmethod
+    def invalidate(self, glossary_version: str) -> int:
+        """Invalidate cache entries for specific glossary version."""
         pass
     
     @abstractmethod
     def cleanup(self) -> int:
-        """
-        Remove stale/expired entries.
-        
-        Returns:
-            Number of entries removed
-        """
+        """Remove stale/expired entries."""
         pass
     
     @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
-        """
-        Get cache statistics.
-        
-        Returns:
-            Dict with metrics (hits, misses, size, etc.)
-        """
+        """Get cache statistics."""
         pass
 
 
 # ===== Glossary Interface =====
 
 class IGlossaryProcessor(ABC):
-    """
-    Interface for glossary processing.
-    """
+    """Interface for glossary processing."""
     
     @abstractmethod
     def preprocess(
@@ -207,18 +174,7 @@ class IGlossaryProcessor(ABC):
         source_lang: str,
         target_lang: str
     ) -> str:
-        """
-        Apply glossary preprocessing before translation.
-        
-        Args:
-            text: Source text
-            domain: Domain context
-            source_lang: Source language
-            target_lang: Target language
-            
-        Returns:
-            Preprocessed text with glossary markers
-        """
+        """Apply glossary preprocessing before translation."""
         pass
     
     @abstractmethod
@@ -229,37 +185,19 @@ class IGlossaryProcessor(ABC):
         source_lang: str,
         target_lang: str
     ) -> Any:
-        """
-        Apply glossary postprocessing after translation.
-        
-        Args:
-            text: Translated text
-            domain: Domain context
-            source_lang: Source language
-            target_lang: Target language
-            
-        Returns:
-            Result object with processed text and applied terms
-        """
+        """Apply glossary postprocessing after translation."""
         pass
     
     @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
-        """
-        Get glossary statistics.
-        
-        Returns:
-            Dict with metrics (total_terms, by_domain, etc.)
-        """
+        """Get glossary statistics."""
         pass
 
 
 # ===== Document Parser Interface =====
 
 class IDocumentParser(ABC):
-    """
-    Interface for document parsers.
-    """
+    """Interface for document parsers."""
     
     @property
     @abstractmethod
@@ -269,63 +207,29 @@ class IDocumentParser(ABC):
     
     @abstractmethod
     def can_parse(self, file_path: Path) -> bool:
-        """
-        Check if file can be parsed.
-        
-        Args:
-            file_path: Path to file
-            
-        Returns:
-            True if can parse
-        """
+        """Check if file can be parsed."""
         pass
     
     @abstractmethod
     def validate_document(self, file_path: Path) -> bool:
-        """
-        Validate document before parsing.
-        
-        Args:
-            file_path: Path to document
-            
-        Returns:
-            True if valid
-        """
+        """Validate document before parsing."""
         pass
     
     @abstractmethod
     def parse(self, file_path: Path) -> Document:
-        """
-        Parse document and extract content with formatting.
-        
-        Args:
-            file_path: Path to document
-            
-        Returns:
-            Document object with segments
-        """
+        """Parse document and extract content with formatting."""
         pass
     
     @abstractmethod
     def extract_segments(self, document: Document) -> List[TextSegment]:
-        """
-        Extract translatable segments from document.
-        
-        Args:
-            document: Parsed document
-            
-        Returns:
-            List of segments ready for translation
-        """
+        """Extract translatable segments from document."""
         pass
 
 
 # ===== Document Formatter Interface =====
 
 class IDocumentFormatter(ABC):
-    """
-    Interface for document formatters.
-    """
+    """Interface for document formatters."""
     
     @property
     @abstractmethod
@@ -340,17 +244,7 @@ class IDocumentFormatter(ABC):
         output_path: Path,
         preserve_formatting: bool = True
     ) -> Path:
-        """
-        Format and save document.
-        
-        Args:
-            document: Document with translated segments
-            output_path: Where to save
-            preserve_formatting: Whether to preserve formatting
-            
-        Returns:
-            Path to saved document
-        """
+        """Format and save document."""
         pass
     
     @abstractmethod
@@ -359,38 +253,19 @@ class IDocumentFormatter(ABC):
         original: Document,
         translated: Document
     ) -> Document:
-        """
-        Copy styles from original to translated document.
-        
-        Args:
-            original: Original document
-            translated: Translated document
-            
-        Returns:
-            Translated document with preserved styles
-        """
+        """Copy styles from original to translated document."""
         pass
     
     @abstractmethod
     def validate_output(self, output_path: Path) -> bool:
-        """
-        Validate output document.
-        
-        Args:
-            output_path: Path to output document
-            
-        Returns:
-            True if valid
-        """
+        """Validate output document."""
         pass
 
 
 # ===== Progress Callback Interface =====
 
 class IProgressCallback(ABC):
-    """
-    Interface for progress callbacks.
-    """
+    """Interface for progress callbacks."""
     
     @abstractmethod
     def on_start(self, job: TranslationJob) -> None:
@@ -425,9 +300,7 @@ class IProgressCallback(ABC):
 # ===== Translation Pipeline Interface =====
 
 class ITranslationPipeline(ABC):
-    """
-    Interface for translation pipeline.
-    """
+    """Interface for translation pipeline."""
     
     @abstractmethod
     def translate_document(
@@ -439,20 +312,7 @@ class ITranslationPipeline(ABC):
         domain: str = "general",
         progress_callback: Optional[IProgressCallback] = None
     ) -> TranslationJob:
-        """
-        Translate entire document.
-        
-        Args:
-            input_path: Path to input document
-            output_path: Path for output document
-            source_lang: Source language code
-            target_lang: Target language code
-            domain: Domain for glossary
-            progress_callback: Optional progress callback
-            
-        Returns:
-            TranslationJob with results
-        """
+        """Translate entire document."""
         pass
     
     @abstractmethod
@@ -463,28 +323,12 @@ class ITranslationPipeline(ABC):
         target_lang: str,
         domain: str = "general"
     ) -> TranslationResult:
-        """
-        Translate plain text (no document).
-        
-        Args:
-            text: Text to translate
-            source_lang: Source language code
-            target_lang: Target language code
-            domain: Domain for glossary
-            
-        Returns:
-            TranslationResult
-        """
+        """Translate plain text (no document)."""
         pass
     
     @abstractmethod
     def get_health(self) -> Dict[str, Any]:
-        """
-        Get pipeline health status.
-        
-        Returns:
-            Dict with component statuses
-        """
+        """Get pipeline health status."""
         pass
 
 
@@ -492,8 +336,7 @@ class ITranslationPipeline(ABC):
 
 class CacheAdapter(ITranslationCache):
     """
-    Adapter for existing cache_manager module.
-    Bridges cache_manager.CacheManager to ITranslationCache interface.
+    UPDATED: Adapter with batch operations support.
     """
     
     def __init__(self, cache_manager):
@@ -516,7 +359,6 @@ class CacheAdapter(ITranslationCache):
         if entry is None:
             return None
         
-        # Convert CacheEntry to TranslationResult
         return TranslationResult(
             original_text=entry.source,
             translated_text=entry.target,
@@ -530,13 +372,56 @@ class CacheAdapter(ITranslationCache):
             timestamp=entry.timestamp
         )
     
+    def get_batch(self, requests: List[TranslationRequest]) -> Dict[TranslationRequest, TranslationResult]:
+        """
+        OPTIMIZATION: Batch cache lookup.
+        """
+        # Check if cache_manager supports batch operations
+        if not hasattr(self.cache_manager, 'get_batch'):
+            # Fallback to individual lookups
+            return super().get_batch(requests)
+        
+        # Use batch operation
+        results = {}
+        
+        # Build lookup data
+        lookup_data = []
+        for request in requests:
+            lookup_data.append({
+                'source_text': request.text,
+                'source_lang': request.source_lang,
+                'target_lang': request.target_lang,
+                'glossary_version': getattr(request, 'glossary_version', 'latest'),
+                'domain': request.domain
+            })
+        
+        # Batch lookup
+        entries = self.cache_manager.get_batch(lookup_data)
+        
+        # Convert to results
+        for request, entry in zip(requests, entries):
+            if entry:
+                result = TranslationResult(
+                    original_text=entry.source,
+                    translated_text=entry.target,
+                    source_lang=entry.source_lang,
+                    target_lang=entry.target_lang,
+                    domain=entry.domain,
+                    engine="cached",
+                    model=entry.model,
+                    confidence=entry.confidence,
+                    cached=True,
+                    timestamp=entry.timestamp
+                )
+                results[request] = result
+        
+        return results
+    
     def set(self, request: TranslationRequest, result: TranslationResult) -> None:
         """Store in cache using unified interface."""
-        # Import here to avoid circular dependency
         try:
             from ..cache.cache_manager import CacheEntry
         except ImportError:
-            # Fallback for different import structure
             from cache_manager import CacheEntry
         
         entry = CacheEntry(
@@ -567,10 +452,7 @@ class CacheAdapter(ITranslationCache):
 
 
 class GlossaryAdapter(IGlossaryProcessor):
-    """
-    Adapter for existing glossary_manager module.
-    Bridges glossary_manager.GlossaryManager to IGlossaryProcessor interface.
-    """
+    """Adapter for existing glossary_manager module."""
     
     def __init__(self, glossary_manager):
         """
@@ -586,11 +468,7 @@ class GlossaryAdapter(IGlossaryProcessor):
         source_lang: str,
         target_lang: str
     ) -> str:
-        """
-        Mark glossary terms in source text before translation.
-        
-        Strategy: Replace terms with special markers that translator preserves.
-        """
+        """Mark glossary terms in source text before translation."""
         try:
             from ..glossary.glossary_manager import TermStatus
         except ImportError:
@@ -599,7 +477,7 @@ class GlossaryAdapter(IGlossaryProcessor):
         result = self.glossary_manager.apply_to_text(
             text=text,
             domain=domain,
-            strategy="mark",  # @@term@@
+            strategy="mark",
             status_filter=TermStatus.APPROVED
         )
         
@@ -612,11 +490,7 @@ class GlossaryAdapter(IGlossaryProcessor):
         source_lang: str,
         target_lang: str
     ) -> Any:
-        """
-        Apply glossary terms to translated text.
-        
-        Strategy: Direct replacement of terms in target text.
-        """
+        """Apply glossary terms to translated text."""
         try:
             from ..glossary.glossary_manager import TermStatus
         except ImportError:
@@ -654,7 +528,7 @@ class ConsoleProgressCallback(IProgressCallback):
         segment: TextSegment,
         result: TranslationResult
     ) -> None:
-        pass  # Silent for individual segments
+        pass
     
     def on_complete(self, job: TranslationJob) -> None:
         print(f"✓ Translation complete!")
@@ -688,35 +562,3 @@ class NoOpProgressCallback(IProgressCallback):
     
     def on_error(self, job: TranslationJob, error: Exception) -> None:
         pass
-
-
-# ===== Example Usage =====
-
-if __name__ == "__main__":
-    from .models import TranslationJob, TranslationStatus
-    from pathlib import Path
-    
-    # Test progress callback
-    callback = ConsoleProgressCallback()
-    
-    job = TranslationJob(
-        job_id="test_123",
-        input_file=Path("test.docx"),
-        output_file=Path("test_es.docx"),
-        source_lang="en",
-        target_lang="es",
-        domain="general",
-        engine="openai"
-    )
-    
-    callback.on_start(job)
-    job.total_segments = 10
-    job.started_at = datetime.utcnow()
-    
-    for i in range(1, 11):
-        job.update_progress(i)
-        callback.on_progress(job, i, 10)
-    
-    job.status = TranslationStatus.COMPLETED
-    job.completed_at = datetime.utcnow()
-    callback.on_complete(job)
