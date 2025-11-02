@@ -874,8 +874,7 @@ class EnhancedTranslationPipeline(ITranslationPipeline):
         if not input_path.is_file():
             raise ValidationError(f"Not a file: {input_path}")
         
-        size_mb = input_path.
-                            size_mb = input_path.stat().st_size / (1024 * 1024)
+        size_mb = input_path.stat().st_size / (1024 * 1024)
         if size_mb > 100:
             raise ValidationError(f"File too large: {size_mb:.1f} MB (max: 100 MB)")
         
