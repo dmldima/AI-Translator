@@ -1,10 +1,11 @@
 """
-DOCX Document Parser - FIXED: Path Traversal Protection
+DOCX Document Parser - FIXED: Path Traversal Protection + Section Index
 Extracts text and formatting from .docx files.
 """
 from pathlib import Path
 from typing import List
 import logging
+import os
 from docx import Document as DocxDocument
 from docx.shared import RGBColor, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -28,6 +29,16 @@ logger = logging.getLogger(__name__)
 
 class DocxParser(IDocumentParser):
     """Parser for Microsoft Word .docx files."""
+    
+    def __init__(self, workspace_root: Path = None):
+        """
+        Initialize parser.
+        
+        Args:
+            workspace_root: Root directory for allowed file operations.
+                           If None, uses current working directory.
+        """
+        self.workspace_root = (workspace_root or Path.cwd()).resolve()
     
     @property
     def supported_file_type(self) -> FileType:
@@ -56,8 +67,12 @@ class DocxParser(IDocumentParser):
         Returns:
             True if valid
         """
-        # SECURITY FIX: Validate path to prevent path traversal
-        file_path = self._validate_and_resolve_path(file_path)
+        try:
+            # SECURITY FIX: Validate path to prevent path traversal
+            file_path = self._validate_and_resolve_path(file_path)
+        except ParsingError as e:
+            logger.error(f"Path validation failed: {e}")
+            return False
         
         if not file_path.exists():
             logger.error(f"File not found: {file_path}")
@@ -136,7 +151,7 @@ class DocxParser(IDocumentParser):
             table_segments = self._extract_tables(docx)
             segments.extend(table_segments)
             
-            # Process headers/footers
+            # Process headers/footers (with section index)
             header_segments, footer_segments = self._extract_headers_footers(docx)
             
             document = Document(
@@ -190,22 +205,62 @@ class DocxParser(IDocumentParser):
         Raises:
             ParsingError: If path is unsafe
         """
-        # Convert to absolute path
-        if not file_path.is_absolute():
-            file_path = file_path.resolve()
+        # Resolve to absolute path
+        file_path = file_path.resolve()
         
-        # Check for path traversal attempts
-        path_str = str(file_path)
-        if '..' in path_str:
-            raise ParsingError(f"Path traversal not allowed: {file_path}")
+        # Check workspace boundary
+        try:
+            file_path.relative_to(self.workspace_root)
+        except ValueError:
+            raise ParsingError(
+                f"Access denied: Path outside workspace.\n"
+                f"File: {file_path}\n"
+                f"Workspace: {self.workspace_root}"
+            )
         
-        # Validate filename doesn't contain dangerous characters
-        dangerous_chars = ['<', '>', '|', '\0', '\n', '\r']
-        for char in dangerous_chars:
-            if char in file_path.name:
-                raise ParsingError(f"Invalid character in filename: {repr(char)}")
+        # Validate filename
+        self._validate_filename(file_path.name)
         
         return file_path
+    
+    def _validate_filename(self, filename: str) -> None:
+        """
+        Validate filename for cross-platform compatibility.
+        
+        Args:
+            filename: Filename to validate
+            
+        Raises:
+            ParsingError: If filename is invalid
+        """
+        # OS-specific dangerous characters
+        if os.name == 'nt':  # Windows
+            dangerous = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '\0']
+        else:
+            dangerous = ['/', '\0']
+        
+        for char in dangerous:
+            if char in filename:
+                raise ParsingError(f"Invalid character in filename: {repr(char)}")
+        
+        # Windows reserved names
+        if os.name == 'nt':
+            reserved = {
+                'CON', 'PRN', 'AUX', 'NUL',
+                'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+                'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+            }
+            name_without_ext = filename.rsplit('.', 1)[0].upper()
+            if name_without_ext in reserved:
+                raise ParsingError(f"Reserved Windows filename: {filename}")
+            
+            # No trailing spaces or dots
+            if filename.rstrip() != filename or filename.rstrip('.') != filename:
+                raise ParsingError("Filename cannot end with space or dot on Windows")
+        
+        # Length check
+        if len(filename) > 255:
+            raise ParsingError("Filename too long (max 255 characters)")
     
     def _extract_metadata(self, docx: DocxDocument) -> DocumentMetadata:
         """Extract document metadata."""
@@ -328,21 +383,28 @@ class DocxParser(IDocumentParser):
         return segments
     
     def _extract_headers_footers(self, docx: DocxDocument) -> tuple:
-        """Extract headers and footers."""
+        """
+        Extract headers and footers with section awareness.
+        
+        FIXED: Added section_index to prevent ID collisions.
+        """
         header_segments = []
         footer_segments = []
         
-        for section in docx.sections:
+        for section_idx, section in enumerate(docx.sections):
             # Headers
             header = section.header
             for para_idx, paragraph in enumerate(header.paragraphs):
                 text = paragraph.text.strip()
                 if text:
                     segment = TextSegment(
-                        id=f"header_{para_idx}",
+                        id=f"section_{section_idx}_header_{para_idx}",
                         text=text,
                         segment_type=SegmentType.HEADER,
-                        position=SegmentPosition(paragraph_index=para_idx)
+                        position=SegmentPosition(
+                            section_index=section_idx,
+                            paragraph_index=para_idx
+                        )
                     )
                     header_segments.append(segment)
             
@@ -352,10 +414,13 @@ class DocxParser(IDocumentParser):
                 text = paragraph.text.strip()
                 if text:
                     segment = TextSegment(
-                        id=f"footer_{para_idx}",
+                        id=f"section_{section_idx}_footer_{para_idx}",
                         text=text,
                         segment_type=SegmentType.FOOTER,
-                        position=SegmentPosition(paragraph_index=para_idx)
+                        position=SegmentPosition(
+                            section_index=section_idx,
+                            paragraph_index=para_idx
+                        )
                     )
                     footer_segments.append(segment)
         
