@@ -1,5 +1,5 @@
 """
-DOCX Document Parser.
+DOCX Document Parser - FIXED: Path Traversal Protection
 Extracts text and formatting from .docx files.
 """
 from pathlib import Path
@@ -56,6 +56,9 @@ class DocxParser(IDocumentParser):
         Returns:
             True if valid
         """
+        # SECURITY FIX: Validate path to prevent path traversal
+        file_path = self._validate_and_resolve_path(file_path)
+        
         if not file_path.exists():
             logger.error(f"File not found: {file_path}")
             return False
@@ -85,6 +88,9 @@ class DocxParser(IDocumentParser):
         Raises:
             ParsingError: If parsing fails
         """
+        # SECURITY FIX: Validate path first
+        file_path = self._validate_and_resolve_path(file_path)
+        
         if not self.validate_document(file_path):
             raise ParsingError(f"Invalid document: {file_path}")
         
@@ -171,6 +177,36 @@ class DocxParser(IDocumentParser):
         logger.info(f"Extracted {len(segments)} translatable segments")
         return segments
     
+    def _validate_and_resolve_path(self, file_path: Path) -> Path:
+        """
+        SECURITY: Validate and resolve file path to prevent path traversal.
+        
+        Args:
+            file_path: Input path
+            
+        Returns:
+            Resolved absolute path
+            
+        Raises:
+            ParsingError: If path is unsafe
+        """
+        # Convert to absolute path
+        if not file_path.is_absolute():
+            file_path = file_path.resolve()
+        
+        # Check for path traversal attempts
+        path_str = str(file_path)
+        if '..' in path_str:
+            raise ParsingError(f"Path traversal not allowed: {file_path}")
+        
+        # Validate filename doesn't contain dangerous characters
+        dangerous_chars = ['<', '>', '|', '\0', '\n', '\r']
+        for char in dangerous_chars:
+            if char in file_path.name:
+                raise ParsingError(f"Invalid character in filename: {repr(char)}")
+        
+        return file_path
+    
     def _extract_metadata(self, docx: DocxDocument) -> DocumentMetadata:
         """Extract document metadata."""
         core_props = docx.core_properties
@@ -196,9 +232,6 @@ class DocxParser(IDocumentParser):
             if first_para.runs:
                 first_run = first_para.runs[0]
                 styles.default_font = first_run.font.name
-        
-        # Note: Full style extraction is complex
-        # This is a simplified version
         
         return styles
     
@@ -332,34 +365,3 @@ class DocxParser(IDocumentParser):
 class ParsingError(Exception):
     """Exception raised when parsing fails."""
     pass
-
-
-# ===== Example Usage =====
-
-if __name__ == "__main__":
-    from pathlib import Path
-    
-    # Parse document
-    parser = DocxParser()
-    
-    test_file = Path("test_document.docx")
-    if test_file.exists():
-        document = parser.parse(test_file)
-        
-        print(f"Document: {document.file_path.name}")
-        print(f"Total segments: {len(document.segments)}")
-        print(f"Total words: {document.total_words}")
-        print(f"Translatable segments: {document.translatable_segments}")
-        
-        print(f"\nMetadata:")
-        print(f"  Title: {document.metadata.title}")
-        print(f"  Author: {document.metadata.author}")
-        
-        print(f"\nFirst 3 segments:")
-        for segment in document.segments[:3]:
-            print(f"  [{segment.id}] {segment.text[:50]}...")
-            if segment.text_formatting:
-                fmt = segment.text_formatting
-                print(f"    Font: {fmt.font_name}, Size: {fmt.font_size}, Bold: {fmt.bold}")
-    else:
-        print(f"Test file not found: {test_file}")
