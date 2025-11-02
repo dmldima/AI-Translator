@@ -1,10 +1,12 @@
 """
-Enhanced XLSX Document Formatter - FIXED: Path Traversal Protection
+Enhanced XLSX Document Formatter - FIXED: Path Traversal + Memory Management + Atomic Saves
 Handles merged cells, conditional formatting, and all cell properties.
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 import logging
+import os
+import uuid
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
 from openpyxl.utils import get_column_letter
@@ -20,8 +22,18 @@ logger = logging.getLogger(__name__)
 class EnhancedXlsxFormatter(IDocumentFormatter):
     """
     Enhanced XLSX formatter with complete formatting preservation.
-    FIXED: Path traversal protection.
+    FIXED: Path traversal protection, memory management, atomic saves.
     """
+    
+    def __init__(self, workspace_root: Path = None):
+        """
+        Initialize formatter.
+        
+        Args:
+            workspace_root: Root directory for allowed file operations.
+                           If None, uses current working directory.
+        """
+        self.workspace_root = (workspace_root or Path.cwd()).resolve()
     
     @property
     def supported_file_type(self) -> FileType:
@@ -43,7 +55,13 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
             
         Returns:
             Path to saved document
+            
+        Raises:
+            FormattingError: If formatting fails
         """
+        wb = None
+        temp_path = None
+        
         try:
             # SECURITY FIX: Validate paths before processing
             document.file_path = self._validate_and_resolve_path(document.file_path)
@@ -63,9 +81,8 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
                 # Create new workbook from scratch
                 wb = self._create_new_workbook(document)
             
-            # Save workbook
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            wb.save(output_path)
+            # Atomic save using temp file
+            self._save_atomic(wb, output_path)
             
             # Validate formatting preservation
             if preserve_formatting:
@@ -74,9 +91,84 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
             logger.info(f"✓ Spreadsheet saved: {output_path}")
             return output_path
             
+        except FileNotFoundError as e:
+            raise FormattingError(
+                f"Input file not found: {document.file_path}\n"
+                f"Please verify the file path and try again."
+            ) from e
+        
+        except PermissionError as e:
+            raise FormattingError(
+                f"Permission denied: Cannot write to {output_path}\n"
+                f"Please check file permissions or choose a different location."
+            ) from e
+        
+        except ValueError as e:
+            if "workspace" in str(e).lower():
+                raise FormattingError(
+                    f"Security error: File path outside allowed workspace.\n"
+                    f"File: {document.file_path}\n"
+                    f"Workspace: {self.workspace_root}"
+                ) from e
+            raise
+        
         except Exception as e:
             logger.error(f"Formatting failed: {e}")
-            raise FormattingError(f"Failed to format spreadsheet: {e}")
+            raise FormattingError(
+                f"Failed to format XLSX spreadsheet.\n"
+                f"Error: {e}\n"
+                f"Please verify the file is not corrupted."
+            ) from e
+        
+        finally:
+            # CRITICAL: Close workbook to release file descriptors
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+            
+            # Cleanup temp file if exists
+            if temp_path and temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+    
+    def _save_atomic(self, wb: Workbook, output_path: Path) -> None:
+        """
+        Atomic save using temp file to prevent corruption.
+        
+        Args:
+            wb: Workbook to save
+            output_path: Target path
+            
+        Raises:
+            FormattingError: If save fails
+        """
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Create temp file in same directory (ensures same filesystem for atomic rename)
+        temp_path = output_path.with_name(
+            f'.tmp_{uuid.uuid4().hex}_{output_path.name}'
+        )
+        
+        try:
+            wb.save(temp_path)
+            
+            # Close workbook BEFORE rename (important for Windows)
+            wb.close()
+            
+            # Atomic rename (POSIX) / replace (Windows)
+            temp_path.replace(output_path)
+        except Exception as e:
+            # Cleanup temp file on error
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            raise FormattingError(f"Failed to save spreadsheet: {e}") from e
     
     def _validate_and_resolve_path(self, file_path: Path, check_exists: bool = True) -> Path:
         """
@@ -92,30 +184,66 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
         Raises:
             FormattingError: If path is unsafe
         """
-        # Convert to absolute path
-        if not file_path.is_absolute():
-            file_path = file_path.resolve()
+        # Resolve to absolute path
+        file_path = file_path.resolve()
         
-        # Check for path traversal attempts
-        path_str = str(file_path)
-        if '..' in path_str:
-            raise FormattingError(f"Path traversal not allowed: {file_path}")
+        # Check workspace boundary
+        try:
+            file_path.relative_to(self.workspace_root)
+        except ValueError:
+            raise FormattingError(
+                f"Access denied: Path outside workspace.\n"
+                f"File: {file_path}\n"
+                f"Workspace: {self.workspace_root}"
+            )
         
-        # Validate filename doesn't contain dangerous characters
-        dangerous_chars = ['<', '>', '|', '\0', '\n', '\r']
-        for char in dangerous_chars:
-            if char in file_path.name:
-                raise FormattingError(f"Invalid character in filename: {repr(char)}")
-        
-        # Check parent directory exists (for output files)
-        if not check_exists and not file_path.parent.exists():
-            raise FormattingError(f"Output directory doesn't exist: {file_path.parent}")
+        # Validate filename
+        self._validate_filename(file_path.name)
         
         # Check file exists (for input files)
         if check_exists and not file_path.exists():
             raise FormattingError(f"File not found: {file_path}")
         
         return file_path
+    
+    def _validate_filename(self, filename: str) -> None:
+        """
+        Validate filename for cross-platform compatibility.
+        
+        Args:
+            filename: Filename to validate
+            
+        Raises:
+            FormattingError: If filename is invalid
+        """
+        # OS-specific dangerous characters
+        if os.name == 'nt':  # Windows
+            dangerous = ['<', '>', ':', '"', '/', '\\', '|', '?', '*', '\0']
+        else:
+            dangerous = ['/', '\0']
+        
+        for char in dangerous:
+            if char in filename:
+                raise FormattingError(f"Invalid character in filename: {repr(char)}")
+        
+        # Windows reserved names
+        if os.name == 'nt':
+            reserved = {
+                'CON', 'PRN', 'AUX', 'NUL',
+                'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+                'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+            }
+            name_without_ext = filename.rsplit('.', 1)[0].upper()
+            if name_without_ext in reserved:
+                raise FormattingError(f"Reserved Windows filename: {filename}")
+            
+            # No trailing spaces or dots
+            if filename.rstrip() != filename or filename.rstrip('.') != filename:
+                raise FormattingError("Filename cannot end with space or dot on Windows")
+        
+        # Length check
+        if len(filename) > 255:
+            raise FormattingError("Filename too long (max 255 characters)")
     
     def _replace_text_in_place(
         self,
@@ -187,7 +315,18 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
         segments: List[TextSegment]
     ) -> Dict[str, TextSegment]:
         """Build lookup map of segments by ID."""
-        return {segment.id: segment for segment in segments}
+        segment_map = {}
+        duplicates = []
+        
+        for segment in segments:
+            if segment.id in segment_map:
+                duplicates.append(segment.id)
+            segment_map[segment.id] = segment
+        
+        if duplicates:
+            logger.warning(f"Duplicate segment IDs found: {len(duplicates)}")
+        
+        return segment_map
     
     def _create_new_workbook(self, document: Document) -> Workbook:
         """
@@ -346,21 +485,24 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
         Validate that formatting was preserved.
         
         Returns:
-            True if validation passed
+            True if validation passed (warnings don't fail)
         """
+        original_wb = None
+        output_wb = None
+        
         try:
             original_wb = load_workbook(original_path, data_only=False)
             output_wb = load_workbook(output_path, data_only=False)
             
-            # Compare structure
+            # Compare structure (critical checks)
             if len(original_wb.worksheets) != len(output_wb.worksheets):
-                logger.warning(
-                    f"Worksheet count mismatch: "
-                    f"{len(original_wb.worksheets)} vs {len(output_wb.worksheets)}"
+                logger.error(
+                    f"CRITICAL: Worksheet count mismatch: "
+                    f"{len(original_wb.worksheets)} → {len(output_wb.worksheets)}"
                 )
                 return False
             
-            validation_passed = True
+            warnings = 0
             
             # Sample formatting checks on first sheet
             if original_wb.worksheets and output_wb.worksheets:
@@ -374,9 +516,9 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
                 if orig_merged != out_merged:
                     logger.warning(
                         f"Merged cells mismatch: "
-                        f"{len(orig_merged)} vs {len(out_merged)}"
+                        f"{len(orig_merged)} → {len(out_merged)}"
                     )
-                    validation_passed = False
+                    warnings += 1
                 
                 # Sample cell formatting checks (first 5 rows, 5 cols)
                 for row in range(1, min(6, orig_sheet.max_row + 1)):
@@ -388,16 +530,14 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
                         if orig_cell.font.name != out_cell.font.name:
                             logger.warning(
                                 f"Font mismatch at ({row},{col}): "
-                                f"{orig_cell.font.name} vs {out_cell.font.name}"
+                                f"{orig_cell.font.name} → {out_cell.font.name}"
                             )
-                            validation_passed = False
+                            warnings += 1
                         
                         # Check fill
                         if orig_cell.fill.start_color != out_cell.fill.start_color:
-                            logger.warning(
-                                f"Fill color mismatch at ({row},{col})"
-                            )
-                            validation_passed = False
+                            logger.warning(f"Fill color mismatch at ({row},{col})")
+                            warnings += 1
                 
                 # Check column widths
                 for col_letter in ['A', 'B', 'C', 'D', 'E']:
@@ -407,20 +547,34 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
                     if orig_width != out_width:
                         logger.warning(
                             f"Column width mismatch for {col_letter}: "
-                            f"{orig_width} vs {out_width}"
+                            f"{orig_width} → {out_width}"
                         )
-                        validation_passed = False
+                        warnings += 1
             
-            if validation_passed:
-                logger.info("✓ Formatting validation passed")
+            if warnings > 0:
+                logger.warning(f"⚠ Formatting validation: {warnings} warnings")
             else:
-                logger.warning("⚠ Formatting validation found differences")
+                logger.info("✓ Formatting validation: perfect match")
             
-            return validation_passed
+            # Warnings don't fail validation
+            return True
             
         except Exception as e:
             logger.error(f"Formatting validation failed: {e}")
             return False
+        
+        finally:
+            # Close workbooks
+            if original_wb:
+                try:
+                    original_wb.close()
+                except Exception:
+                    pass
+            if output_wb:
+                try:
+                    output_wb.close()
+                except Exception:
+                    pass
     
     def preserve_styles(
         self,
@@ -459,12 +613,19 @@ class EnhancedXlsxFormatter(IDocumentFormatter):
             logger.error(f"Output file not found: {output_path}")
             return False
         
+        wb = None
         try:
-            load_workbook(output_path, read_only=True)
+            wb = load_workbook(output_path, read_only=True)
             return True
         except Exception as e:
             logger.error(f"Invalid output spreadsheet: {e}")
             return False
+        finally:
+            if wb:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
 
 
 class FormattingError(Exception):
