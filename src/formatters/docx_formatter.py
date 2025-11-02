@@ -1,7 +1,6 @@
 """
-Enhanced DOCX Document Formatter with Complete Formatting Preservation.
+Enhanced DOCX Document Formatter - FIXED: Path Traversal Protection
 Implements best practices for maintaining all document styling.
-FIXED: Enhanced text replacement to preserve all formatting properties
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -23,15 +22,7 @@ logger = logging.getLogger(__name__)
 class EnhancedDocxFormatter(IDocumentFormatter):
     """
     Enhanced DOCX formatter with complete formatting preservation.
-    
-    Features:
-    - Preserves all text-level formatting (font, size, color, effects)
-    - Preserves paragraph-level formatting (alignment, spacing, indentation)
-    - Preserves styles and themes
-    - Preserves tables with borders and shading
-    - Preserves headers/footers
-    - Preserves images and shapes (non-text elements)
-    - Validates formatting preservation
+    FIXED: Path traversal protection.
     """
     
     @property
@@ -56,6 +47,10 @@ class EnhancedDocxFormatter(IDocumentFormatter):
             Path to saved document
         """
         try:
+            # SECURITY FIX: Validate paths before processing
+            document.file_path = self._validate_and_resolve_path(document.file_path)
+            output_path = self._validate_and_resolve_path(output_path, check_exists=False)
+            
             logger.info(f"Formatting document: {output_path.name}")
             
             # Load original document to preserve structure
@@ -82,6 +77,45 @@ class EnhancedDocxFormatter(IDocumentFormatter):
         except Exception as e:
             logger.error(f"Formatting failed: {e}")
             raise FormattingError(f"Failed to format document: {e}")
+    
+    def _validate_and_resolve_path(self, file_path: Path, check_exists: bool = True) -> Path:
+        """
+        SECURITY: Validate and resolve file path to prevent path traversal.
+        
+        Args:
+            file_path: Input path
+            check_exists: Whether to check if path exists
+            
+        Returns:
+            Resolved absolute path
+            
+        Raises:
+            FormattingError: If path is unsafe
+        """
+        # Convert to absolute path
+        if not file_path.is_absolute():
+            file_path = file_path.resolve()
+        
+        # Check for path traversal attempts
+        path_str = str(file_path)
+        if '..' in path_str:
+            raise FormattingError(f"Path traversal not allowed: {file_path}")
+        
+        # Validate filename doesn't contain dangerous characters
+        dangerous_chars = ['<', '>', '|', '\0', '\n', '\r']
+        for char in dangerous_chars:
+            if char in file_path.name:
+                raise FormattingError(f"Invalid character in filename: {repr(char)}")
+        
+        # Check parent directory exists (for output files)
+        if not check_exists and not file_path.parent.exists():
+            raise FormattingError(f"Output directory doesn't exist: {file_path.parent}")
+        
+        # Check file exists (for input files)
+        if check_exists and not file_path.exists():
+            raise FormattingError(f"File not found: {file_path}")
+        
+        return file_path
     
     def _replace_text_in_place(
         self,
@@ -621,4 +655,3 @@ class FormattingError(Exception):
 
 # Compatibility alias for existing code
 DocxFormatter = EnhancedDocxFormatter
-                    
