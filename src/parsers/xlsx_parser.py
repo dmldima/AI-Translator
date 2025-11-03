@@ -320,7 +320,6 @@ class XlsxParser(IDocumentParser):
         
         # Column width and row height
         col_letter = cell.column_letter
-        column_width = sheet.column_dimensions[col_letter].width if col_letter in
         column_width = sheet.column_dimensions[col_letter].width if col_letter in sheet.column_dimensions else None
         row_height = sheet.row_dimensions[cell.row].height if cell.row in sheet.row_dimensions else None
         
